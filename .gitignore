@@ -18,3 +18,7 @@ config.json
 
 # Exported text / dumps
 015_phone_numbers.txt
+
+# OCR binary language data
+tessdata/
+
