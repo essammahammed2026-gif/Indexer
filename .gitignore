@@ -22,3 +22,6 @@ config.json
 # OCR binary language data
 tessdata/
 
+# Uploaded files and target images
+uploads/
+

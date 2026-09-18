@@ -6,8 +6,11 @@ Supports .xlsx (via zipfile + xml.etree), .csv, and standard telecom CDR parsing
 import os
 import re
 import csv
+import json
 import sqlite3
 import zipfile
+import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -102,7 +105,7 @@ def init_db(conn):
         sheet_name UNINDEXED,
         row_idx UNINDEXED,
         content,
-        tokenize='unicode61'
+        tokenize='trigram'
     );
     """)
 
@@ -125,6 +128,19 @@ def init_db(conn):
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(file_path, sheet_name, row_idx)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ocr_boxes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT NOT NULL,
+        sheet_name TEXT NOT NULL,
+        img_width INTEGER,
+        img_height INTEGER,
+        boxes_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(file_path, sheet_name)
     );
     """)
     conn.commit()
@@ -285,25 +301,112 @@ def parse_txt(fpath):
             continue
     return rows_data
 
-def run_ocr(image_path):
-    """Run Tesseract OCR on an image file using eng+ara."""
+def get_image_dimensions(img_path):
+    """Retrieve width and height of an image file using magick identify or fallback."""
     try:
-        import subprocess
-        tessdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
-        cmd = ['tesseract']
-        if os.path.exists(tessdata_dir):
-            cmd.extend(['--tessdata-dir', tessdata_dir])
-        cmd.extend([image_path, 'stdout', '-l', 'eng+ara', '--oem', '1'])
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=25)
-        return res.stdout.decode('utf-8', errors='ignore').strip()
+        res = subprocess.run(['magick', 'identify', '-format', '%w %h', img_path], capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and res.stdout.strip():
+            parts = res.stdout.strip().split()
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                return int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+    return None, None
+
+def preprocess_image(input_path, output_path):
+    """
+    Applies image preprocessing specifically tailored for Arabic and English OCR:
+    - Grayscale conversion
+    - Contrast stretch and auto-leveling
+    - Automatic deskewing up to 40%
+    - Subtle sharpening to restore stroke boundaries
+    """
+    try:
+        cmd = [
+            'magick', input_path,
+            '-colorspace', 'gray',
+            '-auto-level',
+            '-contrast-stretch', '1%x1%',
+            '-deskew', '40%',
+            '-sharpen', '0x1',
+            output_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception as e:
-        print(f"[OCR ERROR] {image_path}: {e}")
-        return ""
+        print(f"[PREPROCESS ERROR] {input_path}: {e}")
+        return False
+
+def run_ocr(image_path):
+    """Run Tesseract OCR on an image file using eng+ara with preprocessing."""
+    text, _ = run_ocr_detailed(image_path)
+    return text
+
+def run_ocr_detailed(image_path):
+    """
+    Runs preprocessed Tesseract OCR on image_path.
+    Returns:
+      (plain_text: str, boxes: list of dicts)
+      where each box is {"text": str, "left": int, "top": int, "width": int, "height": int, "conf": float}
+    """
+    tessdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
+    base_cmd = ['tesseract']
+    if os.path.exists(tessdata_dir):
+        base_cmd.extend(['--tessdata-dir', tessdata_dir])
+
+    # Work in temporary directory for preprocessed copy
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prep_img = os.path.join(tmpdir, "preprocessed.png")
+        if preprocess_image(image_path, prep_img):
+            target_to_ocr = prep_img
+        else:
+            target_to_ocr = image_path
+
+        # 1. Extract bounding boxes using TSV mode
+        tsv_cmd = base_cmd + [target_to_ocr, 'stdout', '-l', 'eng+ara', '--oem', '1', '-c', 'tessedit_create_tsv=1']
+        boxes = []
+        try:
+            res_tsv = subprocess.run(tsv_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+            tsv_lines = res_tsv.stdout.decode('utf-8', errors='ignore').splitlines()
+            for line in tsv_lines[1:]:
+                parts = line.split('\t')
+                if len(parts) >= 12:
+                    word = parts[11].strip()
+                    if word:
+                        try:
+                            conf = float(parts[10])
+                            left = int(parts[6])
+                            top = int(parts[7])
+                            width = int(parts[8])
+                            height = int(parts[9])
+                            boxes.append({
+                                "text": word,
+                                "left": left,
+                                "top": top,
+                                "width": width,
+                                "height": height,
+                                "conf": conf
+                            })
+                        except (ValueError, IndexError):
+                            pass
+        except Exception as e:
+            print(f"[OCR TSV ERROR] {image_path}: {e}")
+
+        # 2. Extract standard plain text
+        txt_cmd = base_cmd + [target_to_ocr, 'stdout', '-l', 'eng+ara', '--oem', '1']
+        plain_text = ""
+        try:
+            res_txt = subprocess.run(txt_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+            plain_text = res_txt.stdout.decode('utf-8', errors='ignore').strip()
+        except Exception as e:
+            print(f"[OCR TXT ERROR] {image_path}: {e}")
+
+        return plain_text, boxes
 
 def parse_pdf(fpath):
     rows_data = []
+    pdf_boxes = {} # {sheet_name: (width, height, boxes)}
     try:
-        import subprocess
         res = subprocess.run(
             ['pdftotext', '-layout', fpath, '-'],
             stdout=subprocess.PIPE,
@@ -322,7 +425,6 @@ def parse_pdf(fpath):
     total_chars = sum(len(r[2][0]) for r in rows_data)
     if total_chars < 50:
         try:
-            import subprocess, tempfile
             with tempfile.TemporaryDirectory() as tmpdir:
                 # Render up to first 5 pages to images
                 ppm_cmd = ['pdftoppm', '-png', '-r', '150', '-l', '5', fpath, os.path.join(tmpdir, 'p')]
@@ -331,11 +433,15 @@ def parse_pdf(fpath):
                 if pngs:
                     rows_data = []
                     for p_num, png in enumerate(pngs, start=1):
-                        ocr_txt = run_ocr(png)
+                        sname = f'Page_{p_num}'
+                        ocr_txt, boxes = run_ocr_detailed(png)
+                        w, h = get_image_dimensions(png)
+                        if boxes:
+                            pdf_boxes[sname] = (w, h, boxes)
                         for line_idx, line in enumerate(ocr_txt.splitlines(), start=1):
                             line_s = line.strip()
                             if line_s:
-                                rows_data.append((f'Page_{p_num}', line_idx, [line_s]))
+                                rows_data.append((sname, line_idx, [line_s]))
         except Exception as e:
             print(f"[PDF OCR ERROR] {fpath}: {e}")
 
@@ -343,7 +449,7 @@ def parse_pdf(fpath):
 
 def parse_image(fpath):
     rows_data = []
-    text = run_ocr(fpath)
+    text, boxes = run_ocr_detailed(fpath)
     if text:
         for idx, line in enumerate(text.splitlines(), start=1):
             line_s = line.strip()
@@ -432,9 +538,32 @@ def process_file(fpath, conn):
     # Delete previous entries if any
     cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (file_id,))
     cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (fpath,))
+    cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (fpath,))
 
-    all_rows = parse_document(fpath)
+    all_rows = []
+    ext = os.path.splitext(fpath)[1].lower()
+    if ext in ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'):
+        text, boxes = run_ocr_detailed(fpath)
+        w, h = get_image_dimensions(fpath)
+        if boxes:
+            cur.execute("""
+            INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(file_path, sheet_name) DO UPDATE SET
+                img_width = excluded.img_width,
+                img_height = excluded.img_height,
+                boxes_json = excluded.boxes_json;
+            """, (fpath, 'Image', w, h, json.dumps(boxes, ensure_ascii=False)))
+        if text:
+            for idx, line in enumerate(text.splitlines(), start=1):
+                line_s = line.strip()
+                if line_s:
+                    all_rows.append(('Image', idx, [line_s]))
+    else:
+        all_rows = parse_document(fpath)
+
     if not all_rows:
+        conn.commit()
         return 0
 
     # Group by sheet/section

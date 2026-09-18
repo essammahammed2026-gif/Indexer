@@ -1,0 +1,56 @@
+---
+name: indexer-workflows
+description: Standard operational workflows for the Indexer search and OCR platform. Covers indexing directories, running queries, debugging OCR, database management, and UI maintenance.
+---
+
+# Indexer Workflows & Operational Runbook
+
+This skill provides step-by-step instructions for working on and maintaining the Indexer engine.
+
+## 1. Running the Application
+```bash
+python3 -u app.py
+```
+- Available at `http://localhost:8088`.
+- Server runs in a single process using `http.server.HTTPServer`.
+- Spawns a background daemon thread `folder_watcher_loop` which checks for newly added or modified files every 3 seconds if active.
+
+## 2. Testing & Compiling Code
+Before committing or restarting the server, always check Python syntax:
+```bash
+python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py
+```
+
+## 3. Command Line Ingestion & Queries
+- **Batch Indexing**:
+  ```bash
+  python3 index_sheets.py /path/to/folder
+  ```
+- **CLI Querying**:
+  ```bash
+  # Search phone number:
+  python3 search.py "01002407192"
+
+  # Search Arabic name:
+  python3 search.py "سوزان"
+
+  # Universal text search:
+  python3 search.py --raw "تقرير"
+
+  # Auto-open first match in LibreOffice Calc:
+  python3 search.py "01002407192" --open
+  ```
+
+## 4. OCR Troubleshooting
+- If OCR returns empty bounding boxes or fails:
+  - Check Tesseract version: `tesseract --version`
+  - Check ImageMagick: `magick --version`
+  - Ensure Tesseract TSV mode uses `-c tessedit_create_tsv=1` and does NOT pass positional `tsv` when `--tessdata-dir` is configured.
+  - Verify local tessdata models in `./tessdata/` (`ara.traineddata`, `eng.traineddata`).
+
+## 5. Database Maintenance
+- Always run WAL checkpoints and integrity checks if the database grows large:
+  ```bash
+  sqlite3 sheets_index.db "PRAGMA integrity_check; PRAGMA wal_checkpoint(TRUNCATE);"
+  ```
+- Backups are stored as `sheets_index.db.snap_YYYYMMDD`.
