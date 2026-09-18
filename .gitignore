@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite databases and backups
+*.db
+*.db-wal
+*.db-shm
+*.bak
+
+# Logs
+*.log
+
+# User/system specific config
+config.json
+
+# Exported text / dumps
+015_phone_numbers.txt
