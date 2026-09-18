@@ -8,6 +8,7 @@ __pycache__/
 *.db-wal
 *.db-shm
 *.bak
+*.snap_*
 
 # Logs
 *.log

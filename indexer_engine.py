@@ -35,9 +35,19 @@ def normalize_phone(val):
 def normalize_arabic(text):
     if not text:
         return ""
-    text = re.sub(r'[إأآا]', 'ا', str(text))
+    text = str(text)
+    # 1. Normalize Hamza variants, Teh Marbuta, Alef Maksura
+    text = re.sub(r'[إأآا]', 'ا', text)
     text = re.sub(r'ة', 'ه', text)
     text = re.sub(r'ى', 'ي', text)
+    # Remove Arabic diacritics / Tashkeel
+    text = re.sub(r'[\u064B-\u0652\u0640]', '', text)
+    # 2. Normalize compound prefixes (عبد الرحمن -> عبدالرحمن, ابو الفتوح -> ابوالفتوح)
+    text = re.sub(r'\bعبد\s+(\w+)', r'عبد\1', text)
+    text = re.sub(r'\bابو\s+(\w+)', r'ابو\1', text)
+    # 3. Normalize common colloquial phonetic variants
+    # عمرو -> عمر (ignoring silent waw in Amr)
+    text = re.sub(r'\bعمرو\b', 'عمر', text)
     return text.strip()
 
 def init_db(conn):
@@ -102,6 +112,19 @@ def init_db(conn):
         name TEXT NOT NULL,
         query TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS bookmarks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT NOT NULL,
+        sheet_name TEXT NOT NULL,
+        row_idx INTEGER NOT NULL,
+        tag TEXT DEFAULT 'Lead',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(file_path, sheet_name, row_idx)
     );
     """)
     conn.commit()
@@ -262,6 +285,21 @@ def parse_txt(fpath):
             continue
     return rows_data
 
+def run_ocr(image_path):
+    """Run Tesseract OCR on an image file using eng+ara."""
+    try:
+        import subprocess
+        tessdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata")
+        cmd = ['tesseract']
+        if os.path.exists(tessdata_dir):
+            cmd.extend(['--tessdata-dir', tessdata_dir])
+        cmd.extend([image_path, 'stdout', '-l', 'eng+ara', '--oem', '1'])
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=25)
+        return res.stdout.decode('utf-8', errors='ignore').strip()
+    except Exception as e:
+        print(f"[OCR ERROR] {image_path}: {e}")
+        return ""
+
 def parse_pdf(fpath):
     rows_data = []
     try:
@@ -279,6 +317,38 @@ def parse_pdf(fpath):
                 rows_data.append(('Page', idx, [line_s]))
     except Exception as e:
         print(f"[PDF ERROR] {fpath}: {e}")
+
+    # Fallback to OCR if pdftotext extracted almost no text (e.g. scanned document)
+    total_chars = sum(len(r[2][0]) for r in rows_data)
+    if total_chars < 50:
+        try:
+            import subprocess, tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Render up to first 5 pages to images
+                ppm_cmd = ['pdftoppm', '-png', '-r', '150', '-l', '5', fpath, os.path.join(tmpdir, 'p')]
+                subprocess.run(ppm_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
+                pngs = sorted([os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith('.png')])
+                if pngs:
+                    rows_data = []
+                    for p_num, png in enumerate(pngs, start=1):
+                        ocr_txt = run_ocr(png)
+                        for line_idx, line in enumerate(ocr_txt.splitlines(), start=1):
+                            line_s = line.strip()
+                            if line_s:
+                                rows_data.append((f'Page_{p_num}', line_idx, [line_s]))
+        except Exception as e:
+            print(f"[PDF OCR ERROR] {fpath}: {e}")
+
+    return rows_data
+
+def parse_image(fpath):
+    rows_data = []
+    text = run_ocr(fpath)
+    if text:
+        for idx, line in enumerate(text.splitlines(), start=1):
+            line_s = line.strip()
+            if line_s:
+                rows_data.append(('Image', idx, [line_s]))
     return rows_data
 
 def parse_xls(fpath):
@@ -345,6 +415,8 @@ def parse_document(fpath):
         return parse_txt(fpath)
     elif ext == '.pdf':
         return parse_pdf(fpath)
+    elif ext in ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'):
+        return parse_image(fpath)
     return []
 
 # Backward compatible alias

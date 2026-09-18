@@ -225,6 +225,107 @@ def delete_quick_filter(filter_id):
     except Exception as e:
         return False, str(e)
 
+# Bookmark Helpers
+def get_bookmarks():
+    if not os.path.exists(DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, sheet_name TEXT NOT NULL, row_idx INTEGER NOT NULL, tag TEXT DEFAULT 'Lead', notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(file_path, sheet_name, row_idx));")
+        cur.execute("""
+        SELECT b.id, b.file_path, b.sheet_name, b.row_idx, b.tag, b.notes, b.created_at,
+               c.target_msisdn, c.other_msisdn, c.other_name, c.event_time, c.direction, c.raw_row
+        FROM bookmarks b
+        LEFT JOIN files f ON b.file_path = f.file_path
+        LEFT JOIN cdr_records c ON c.file_id = f.file_id AND c.sheet_name = b.sheet_name AND c.row_idx = b.row_idx
+        ORDER BY b.id DESC;
+        """)
+        results = []
+        for r in cur.fetchall():
+            results.append({
+                "id": r[0],
+                "path": r[1],
+                "file": os.path.basename(r[1]),
+                "sheet": r[2],
+                "row": r[3],
+                "tag": r[4],
+                "notes": r[5] or "",
+                "created_at": r[6],
+                "target": r[7] or "—",
+                "other": r[8] or "—",
+                "name": r[9] or "—",
+                "time": r[10] or "—",
+                "dir": r[11] or "—",
+                "snippet": (r[12] or "")[:400]
+            })
+        conn.close()
+        return results
+    except Exception as e:
+        print(f"[BOOKMARK ERROR] {e}")
+        return []
+
+def add_bookmark(file_path, sheet_name, row_idx, tag="Lead", notes=""):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, sheet_name TEXT NOT NULL, row_idx INTEGER NOT NULL, tag TEXT DEFAULT 'Lead', notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(file_path, sheet_name, row_idx));")
+        cur.execute("""
+        INSERT INTO bookmarks (file_path, sheet_name, row_idx, tag, notes)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(file_path, sheet_name, row_idx) DO UPDATE SET tag = excluded.tag, notes = excluded.notes;
+        """, (file_path, sheet_name, int(row_idx), tag, notes))
+        conn.commit()
+        conn.close()
+        return True, "Bookmark saved"
+    except Exception as e:
+        return False, str(e)
+
+def remove_bookmark(file_path, sheet_name, row_idx):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM bookmarks WHERE file_path = ? AND sheet_name = ? AND row_idx = ?;", (file_path, sheet_name, int(row_idx)))
+        conn.commit()
+        conn.close()
+        return True, "Bookmark removed"
+    except Exception as e:
+        return False, str(e)
+
+def get_context_window(file_path, sheet_name, row_idx, window=3):
+    """Retrieve up to +/- 3 lines around row_idx for document preview."""
+    if not os.path.exists(DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        r_idx = int(row_idx)
+        min_r = max(1, r_idx - window)
+        max_r = r_idx + window
+        cur.execute("""
+        SELECT row_idx, content FROM universal_search
+        WHERE file_path = ? AND sheet_name = ? AND row_idx BETWEEN ? AND ?
+        ORDER BY row_idx ASC;
+        """, (file_path, sheet_name, min_r, max_r))
+        rows = [{"row": r[0], "content": r[1], "target": (r[0] == r_idx)} for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[CONTEXT ERROR] {e}")
+        return []
+
+def backup_database():
+    """Create a rotating daily backup snapshot of sheets_index.db"""
+    if not os.path.exists(DB_PATH):
+        return False, "Database does not exist yet"
+    try:
+        date_str = time.strftime("%Y%m%d")
+        snap_path = f"{DB_PATH}.snap_{date_str}"
+        shutil.copy2(DB_PATH, snap_path)
+        return True, f"Backup created: {os.path.basename(snap_path)}"
+    except Exception as e:
+        return False, str(e)
+
 
 def query_db(query, limit=50, offset=0):
     if not os.path.exists(DB_PATH):
@@ -404,11 +505,12 @@ def query_db(query, limit=50, offset=0):
 
 SUPPORTED_EXTENSIONS = (
     '.xlsx', '.xls', '.csv', '.tsv',
-    '.docx', '.odt', '.txt', '.log', '.json', '.sql', '.pdf'
+    '.docx', '.odt', '.txt', '.log', '.json', '.sql', '.pdf',
+    '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'
 )
 
 def start_indexing_thread(folder_path):
-    """Run full folder scan & index in background with live progress tracking"""
+    """Run folder scan & parallel index with live progress tracking & auto-backup."""
     global INDEX_STATE
     if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
         return False, f"Folder does not exist: {folder_path}"
@@ -422,12 +524,15 @@ def start_indexing_thread(folder_path):
         INDEX_STATE["total"] = 0
         INDEX_STATE["percent"] = 0
         INDEX_STATE["records_indexed"] = 0
-        INDEX_STATE["current_file"] = "Scanning folder..."
+        INDEX_STATE["current_file"] = "Creating safety backup & scanning folder..."
         INDEX_STATE["status_message"] = "Scanning folder..."
 
     def _worker():
         global INDEX_STATE
         try:
+            # 1. Automatic safety snapshot before starting major index
+            backup_database()
+
             files_to_scan = []
             for root, dirs, files in os.walk(folder_path):
                 for f in files:
@@ -438,7 +543,7 @@ def start_indexing_thread(folder_path):
             INDEX_STATE["total"] = len(files_to_scan)
             if not files_to_scan:
                 INDEX_STATE["percent"] = 100
-                INDEX_STATE["status_message"] = "No supported document or spreadsheet files found in folder"
+                INDEX_STATE["status_message"] = "No supported document, sheet, or image files found in folder"
                 INDEX_STATE["running"] = False
                 return
 
@@ -446,19 +551,109 @@ def start_indexing_thread(folder_path):
             indexer_engine.init_db(conn)
             total_records = 0
 
-            for i, fpath in enumerate(files_to_scan, 1):
-                fname = os.path.basename(fpath)
-                INDEX_STATE["current"] = i
-                INDEX_STATE["current_file"] = fname
-                INDEX_STATE["percent"] = int((i / len(files_to_scan)) * 100)
-                INDEX_STATE["status_message"] = f"Indexing {i}/{len(files_to_scan)}: {fname}"
+            # Parallel indexing for multi-core performance
+            import concurrent.futures
+            max_workers = min(4, os.cpu_count() or 2)
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {}
+                for fpath in files_to_scan:
+                    # Each thread parses independently
+                    future = executor.submit(indexer_engine.parse_document, fpath)
+                    future_to_file[future] = fpath
 
-                try:
-                    count = indexer_engine.process_file(fpath, conn)
-                    total_records += count
-                    INDEX_STATE["records_indexed"] = total_records
-                except Exception as ex:
-                    print(f"[INDEX ERROR] {fname}: {ex}")
+                completed = 0
+                for future in concurrent.futures.as_completed(future_to_file):
+                    fpath = future_to_file[future]
+                    fname = os.path.basename(fpath)
+                    completed += 1
+                    INDEX_STATE["current"] = completed
+                    INDEX_STATE["current_file"] = fname
+                    INDEX_STATE["percent"] = int((completed / len(files_to_scan)) * 100)
+                    INDEX_STATE["status_message"] = f"Indexing {completed}/{len(files_to_scan)}: {fname}"
+
+                    try:
+                        rows_data = future.result()
+                        # Commit parsed rows sequentially into DB (prevents SQLite lock contention)
+                        if rows_data:
+                            folder, filename = os.path.split(fpath)
+                            cur = conn.cursor()
+                            cur.execute("INSERT OR IGNORE INTO files (file_path, filename, folder) VALUES (?, ?, ?);", (fpath, filename, folder))
+                            cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (fpath,))
+                            file_id = cur.fetchone()[0]
+                            cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (file_id,))
+                            cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (fpath,))
+
+                            sheets = {}
+                            for sname, r_idx, row in rows_data:
+                                sheets.setdefault(sname, []).append((r_idx, row))
+
+                            cdr_batch = []
+                            fts_batch = []
+                            for sname, sheet_rows in sheets.items():
+                                header_map = {}
+                                for r_idx, row in sheet_rows[:25]:
+                                    cleaned_row = [str(c).lower().strip() if c is not None else '' for c in row]
+                                    if any('msisdn' in c or 'target' in c or 'call type' in c or 'called' in c or 'dialed' in c or 'sub_id' in c or 'phone' in c for c in cleaned_row):
+                                        for idx, c in enumerate(cleaned_row):
+                                            if c: header_map[c] = idx
+                                        break
+                                for r_idx, row in sheet_rows:
+                                    row_non_empty = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                                    if not row_non_empty: continue
+                                    row_str = " | ".join(row_non_empty)
+                                    fts_batch.append((fpath, sname, r_idx, row_str))
+
+                                    # CDR fields
+                                    def get_c(key):
+                                        idx = header_map.get(key)
+                                        return str(row[idx]).strip() if idx is not None and idx < len(row) and row[idx] is not None and str(row[idx]).strip() else None
+                                    target_msisdn = get_c('target_msisdn') or get_c('target') or get_c('msisdn')
+                                    other_msisdn = get_c('other_msisdn') or get_c('called number') or get_c('b number') or get_c('party')
+                                    other_name = get_c('other_name') or get_c('name')
+                                    event_time = get_c('event_start_time') or get_c('call date') or get_c('date') or get_c('time')
+                                    duration = get_c('call_duration') or get_c('duration')
+                                    direction = get_c('event_direction') or get_c('call type') or get_c('direction')
+                                    other_id = get_c('other_id') or get_c('sub_id_val') or get_c('national')
+                                    other_address = get_c('other_address') or get_c('street') or get_c('address')
+                                    cell_id = get_c('cell_nid') or get_c('cell')
+                                    cell_address = get_c('cell_address') or get_c('site')
+
+                                    if not target_msisdn or not other_msisdn:
+                                        p_found = [p for p in [normalize_phone(c) for c in row] if p]
+                                        if len(p_found) >= 2:
+                                            target_msisdn, other_msisdn = p_found[0], p_found[1]
+                                        elif len(p_found) == 1 and not other_msisdn:
+                                            other_msisdn = p_found[0]
+
+                                    t_norm = normalize_phone(target_msisdn)
+                                    o_norm = normalize_phone(other_msisdn)
+                                    on_norm = normalize_arabic(str(other_name)) if other_name else None
+
+                                    if t_norm or o_norm or other_name or other_id:
+                                        cdr_batch.append((
+                                            file_id, sname, r_idx,
+                                            str(target_msisdn) if target_msisdn else None, t_norm,
+                                            str(other_msisdn) if other_msisdn else None, o_norm,
+                                            str(other_name) if other_name else None, on_norm,
+                                            str(event_time) if event_time else None,
+                                            str(duration) if duration else None,
+                                            str(direction) if direction else None,
+                                            str(other_id) if other_id else None,
+                                            str(other_address) if other_address else None,
+                                            str(cell_id) if cell_id else None,
+                                            str(cell_address) if cell_address else None,
+                                            row_str
+                                        ))
+                            if cdr_batch:
+                                cur.executemany("INSERT INTO cdr_records (file_id, sheet_name, row_idx, target_msisdn, target_norm, other_msisdn, other_norm, other_name, other_name_norm, event_time, duration, direction, other_id, other_address, cell_id, cell_address, raw_row) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);", cdr_batch)
+                            if fts_batch:
+                                cur.executemany("INSERT INTO universal_search (file_path, sheet_name, row_idx, content) VALUES (?, ?, ?, ?);", fts_batch)
+                            conn.commit()
+                            total_records += len(fts_batch)
+                            INDEX_STATE["records_indexed"] = total_records
+                    except Exception as ex:
+                        print(f"[INDEX ERROR] {fname}: {ex}")
 
             conn.close()
             INDEX_STATE["percent"] = 100
@@ -1062,6 +1257,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color: var(--accent);
     padding: 4px 10px;
     border-radius: 6px;
+    border-radius: 6px;
     font-size: 0.8rem;
     cursor: pointer;
     font-weight: 600;
@@ -1074,6 +1270,54 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     background: #0284c7;
     color: #fff;
     border-style: solid;
+  }
+  .btn-bookmark {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: #fbbf24;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-bookmark:hover {
+    background: #fbbf2420;
+    border-color: #fbbf24;
+  }
+  .btn-context {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: #a78bfa;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-context:hover {
+    background: #a78bfa20;
+    border-color: #a78bfa;
+  }
+  .hints-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: #0f172a80;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #1e293b;
+    margin-top: 8px;
+  }
+  .hints-bar code {
+    background: #1e293b;
+    color: #38bdf8;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-family: monospace;
   }
 
   /* Modal for Setting Folder */
@@ -1125,7 +1369,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="folderModal" class="modal-overlay">
     <div class="modal-content">
       <h3>📁 Set Folder to Index</h3>
-      <p>Enter the full directory path to scan and index all documents (<code>.xlsx</code>, <code>.xls</code>, <code>.csv</code>, <code>.docx</code>, <code>.odt</code>, <code>.txt</code>, <code>.pdf</code>). Subfolders will be indexed and continuously watched.</p>
+      <p>Enter the full directory path to scan and index all documents (<code>.xlsx</code>, <code>.xls</code>, <code>.csv</code>, <code>.docx</code>, <code>.odt</code>, <code>.txt</code>, <code>.pdf</code>, <code>.png</code>, <code>.jpg</code>). Subfolders will be indexed with multi-core OCR and continuously watched.</p>
       <input type="text" id="folderPathInput" style="width:100%; margin-bottom: 8px;" placeholder="/home/essam/Work/George/FINAL">
       <div class="modal-actions">
         <button class="btn-header" onclick="closeFolderModal()">Cancel</button>
@@ -1154,6 +1398,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Bookmark Modal -->
+  <div id="bookmarkModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3>🔖 Bookmark / Tag Record</h3>
+      <p id="bookmarkTargetLabel" style="font-family:monospace; color:#38bdf8;"></p>
+      <input type="hidden" id="bmFilePath">
+      <input type="hidden" id="bmSheetName">
+      <input type="hidden" id="bmRowIdx">
+      <div style="margin-bottom: 12px;">
+        <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">Tag / Classification:</label>
+        <select id="bmTagInput" style="width:100%; padding:8px; border-radius:6px; background:#0f172a; color:#fff; border:1px solid var(--border);">
+          <option value="Lead">🌟 Key Lead</option>
+          <option value="Suspect">🚨 Target / Suspect</option>
+          <option value="Reviewed">✅ Reviewed</option>
+          <option value="False Positive">❌ False Positive</option>
+        </select>
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">Notes / Annotation:</label>
+        <textarea id="bmNotesInput" rows="3" style="width:100%; padding:8px; border-radius:6px; background:#0f172a; color:#fff; border:1px solid var(--border);" placeholder="Add investigative note or reference..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-header" onclick="closeBookmarkModal()">Cancel</button>
+        <button class="btn-header primary" onclick="submitBookmark()">Save Bookmark</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context Preview Modal -->
+  <div id="contextModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 680px;">
+      <h3>📄 Document Context Window (±3 Lines)</h3>
+      <p id="contextFileLabel" style="font-size:0.82rem; color:var(--text-muted); word-break:break-all;"></p>
+      <div id="contextLinesBox" style="background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:12px; max-height:360px; overflow-y:auto; font-family:monospace; font-size:0.84rem; line-height:1.6;">
+        Loading context...
+      </div>
+      <div class="modal-actions">
+        <button class="btn-header primary" onclick="document.getElementById('contextModal').classList.remove('active')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Hidden File Input for Importing DB -->
   <input type="file" id="dbFileInput" accept=".db,.sqlite,.sqlite3" style="display:none;" onchange="handleImportFile(event)">
 
@@ -1165,6 +1451,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <span class="badge" id="statsBadge">Loading stats...</span>
       <span class="badge badge-watcher" id="watcherBadge" onclick="toggleWatcher()" title="Click to toggle live watcher">👁️ Watcher: ON</span>
       <button class="btn-header" onclick="openFolderModal()">📁 Set Folder</button>
+      <button class="btn-header" onclick="viewBookmarks()" title="View saved leads and bookmarked records">🔖 Bookmarks (<span id="bmCountBadge">0</span>)</button>
+      <button class="btn-header" onclick="triggerBackup()" title="Create rotating snapshot backup">💾 Snapshot</button>
       <button class="btn-header" onclick="exportIndex()">📤 Export Index</button>
       <button class="btn-header" onclick="document.getElementById('dbFileInput').click()">📥 Import Index</button>
       <button class="btn-header" onclick="exportCSV()">📑 Export CSV</button>
@@ -1198,6 +1486,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- Dynamically loaded from database -->
       </div>
       <button class="btn-add-chip" onclick="openFilterModal()" title="Add custom quick filter">+ Add Filter</button>
+    </div>
+    <div class="hints-bar">
+      <span>💡 <b>Search Hints:</b></span>
+      <span>Phones: <code>010...</code> or <code>prefix:015</code></span>
+      <span>Egyptian Names: <code>عبد الرحمن</code> = <code>عبدالرحمن</code></span>
+      <span>Multi-term / Boolean: <code>"جورج" AND "القاهرة"</code></span>
+      <span>Actions: <code>🚀 Open Row</code> launches native app at line | <code>📄 Context</code> views ±3 lines</span>
     </div>
   </div>
 
@@ -1648,6 +1943,12 @@ function renderCards(rows) {
           <span style="color:#64748b; font-size:0.8rem; font-weight:normal;">• ${escapeHtml(r.sheet)} (Row ${r.row})</span>
         </div>
         <div class="card-actions">
+          <button class="btn-context" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="View ±3 lines context">
+            📄 Context
+          </button>
+          <button class="btn-bookmark" onclick="openBookmarkModal('${escapedPath}', '${escapedSheet}', ${r.row}, '${escapeHtml(r.name || r.other || r.target || '')}')" title="Bookmark/tag this record">
+            🔖 Tag
+          </button>
           <button class="btn-action-open" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">
             🚀 Open Row ${r.row}
           </button>
@@ -1705,12 +2006,10 @@ function renderTableRows(rows) {
       <td class="arabic" style="font-size:0.82rem; color:#94a3b8; max-width:220px;">${highlightMatch(r.address, currentQuery)}</td>
       <td>
         <div style="display:flex; gap:4px; align-items:center;">
-          <button class="btn-action-open" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">
-            🚀 Open
-          </button>
-          <button class="btn-action-folder" onclick="revealFolder('${escapedPath}')" title="Open Folder">
-            📂
-          </button>
+          <button class="btn-context" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">📄</button>
+          <button class="btn-bookmark" onclick="openBookmarkModal('${escapedPath}', '${escapedSheet}', ${r.row}, '${escapeHtml(r.name || r.other || r.target || '')}')" title="Tag">🔖</button>
+          <button class="btn-action-open" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">🚀</button>
+          <button class="btn-action-folder" onclick="revealFolder('${escapedPath}')" title="Open Folder">📂</button>
         </div>
       </td>
     `;
@@ -1859,10 +2158,115 @@ async function deleteFilter(id, evt) {
   }
 }
 
+/* Bookmarks & Annotations */
+function openBookmarkModal(filePath, sheetName, rowIdx, hint) {
+  document.getElementById('bmFilePath').value = filePath;
+  document.getElementById('bmSheetName').value = sheetName;
+  document.getElementById('bmRowIdx').value = rowIdx;
+  document.getElementById('bookmarkTargetLabel').innerText = `${filePath.split('/').pop()} • Row ${rowIdx} ${hint ? `(${hint})` : ''}`;
+  document.getElementById('bmNotesInput').value = '';
+  document.getElementById('bookmarkModal').classList.add('active');
+}
+
+function closeBookmarkModal() {
+  document.getElementById('bookmarkModal').classList.remove('active');
+}
+
+async function submitBookmark() {
+  const file = document.getElementById('bmFilePath').value;
+  const sheet = document.getElementById('bmSheetName').value;
+  const row = document.getElementById('bmRowIdx').value;
+  const tag = document.getElementById('bmTagInput').value;
+  const notes = document.getElementById('bmNotesInput').value.trim();
+
+  try {
+    const res = await fetch('/api/bookmarks/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file, sheet, row, tag, notes })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast("🔖 Bookmark saved!");
+      closeBookmarkModal();
+      refreshBookmarkCount();
+    } else {
+      showToast("❌ " + (data.error || "Failed to save bookmark"));
+    }
+  } catch (err) {
+    showToast("❌ Network error saving bookmark");
+  }
+}
+
+async function refreshBookmarkCount() {
+  try {
+    const res = await fetch('/api/bookmarks');
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.bookmarks)) {
+      document.getElementById('bmCountBadge').innerText = data.bookmarks.length;
+    }
+  } catch (err) {}
+}
+
+async function viewBookmarks() {
+  try {
+    const res = await fetch('/api/bookmarks');
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('resultsCount').innerText = `Viewing ${data.bookmarks.length} Bookmarks`;
+      renderCards(data.bookmarks);
+      renderTableRows(data.bookmarks);
+    }
+  } catch (err) {
+    showToast("❌ Failed to load bookmarks");
+  }
+}
+
+/* Context Window Modal */
+async function showContextWindow(filePath, sheetName, rowIdx) {
+  const modal = document.getElementById('contextModal');
+  const box = document.getElementById('contextLinesBox');
+  document.getElementById('contextFileLabel').innerText = `${filePath} (Sheet: ${sheetName}, Row: ${rowIdx})`;
+  box.innerHTML = 'Loading surrounding lines...';
+  modal.classList.add('active');
+
+  try {
+    const res = await fetch(`/api/context?file=${encodeURIComponent(filePath)}&sheet=${encodeURIComponent(sheetName)}&row=${rowIdx}`);
+    const data = await res.json();
+    if (data.ok && data.lines && data.lines.length > 0) {
+      box.innerHTML = data.lines.map(line => {
+        const isTarget = line.target;
+        const bg = isTarget ? 'background: #38bdf820; border-left: 3px solid var(--accent); padding-left: 8px;' : 'opacity: 0.8;';
+        return `<div style="margin-bottom: 6px; ${bg}"><b style="color:#94a3b8;">Row ${line.row}:</b> ${highlightMatch(line.content, currentQuery)}</div>`;
+      }).join('');
+    } else {
+      box.innerHTML = '<span style="color:#64748b;">No surrounding context found for this entry.</span>';
+    }
+  } catch (err) {
+    box.innerHTML = '<span style="color:#ef4444;">Error loading context.</span>';
+  }
+}
+
+async function triggerBackup() {
+  showToast("💾 Creating snapshot backup...");
+  try {
+    const res = await fetch('/api/backup');
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`✅ ${data.message}`);
+    } else {
+      showToast(`❌ Backup failed`);
+    }
+  } catch (err) {
+    showToast(`❌ Network error creating backup`);
+  }
+}
+
 window.onload = () => {
   refreshStats();
   refreshWatcherStatus();
   loadQuickFilters();
+  refreshBookmarkCount();
 };
 </script>
 </body>
@@ -1943,13 +2347,74 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "filters": filters}).encode("utf-8"))
+        elif parsed.path == "/api/bookmarks":
+            bookmarks = get_bookmarks()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "bookmarks": bookmarks}).encode("utf-8"))
+        elif parsed.path == "/api/context":
+            qs = urllib.parse.parse_qs(parsed.query)
+            file_path = qs.get("file", [""])[0]
+            sheet_name = qs.get("sheet", [""])[0]
+            row_val = qs.get("row", [""])[0]
+            row_idx = int(row_val) if row_val.isdigit() else 1
+            ctx = get_context_window(file_path, sheet_name, row_idx, window=3)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "lines": ctx}).encode("utf-8"))
+        elif parsed.path == "/api/backup":
+            ok, msg = backup_database()
+            self.send_response(200 if ok else 500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/filters/add":
+        if parsed.path == "/api/bookmarks/add":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                fpath = data.get("file", "").strip()
+                sname = data.get("sheet", "").strip()
+                row = data.get("row", 1)
+                tag = data.get("tag", "Lead").strip()
+                notes = data.get("notes", "").strip()
+                ok, msg = add_bookmark(fpath, sname, row, tag=tag, notes=notes)
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/bookmarks/delete":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                fpath = data.get("file", "").strip()
+                sname = data.get("sheet", "").strip()
+                row = data.get("row", 1)
+                ok, msg = remove_bookmark(fpath, sname, row)
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/filters/add":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
