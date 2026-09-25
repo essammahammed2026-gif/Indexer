@@ -44,9 +44,36 @@
 - **Indexer** (`/home/essam/Projects/Indexer`) is completely independent from any other projects on the system (e.g., `ESSR_PA`). Never mix files, configurations, or schemas between them.
 
 ## 6. Modular Package Refactoring & Session Hand-off Guidelines
-- When refactoring `app.py` into decoupled submodules (`core/`, `storage/`, `services/`, `web/`, `templates/`, `static/`), adhere to [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md).
+- When refactoring `app.py` into decoupled submodules (`core/`, `storage/`, `services/`, `web/`, `templates/`, `static/`, `parsing/`), adhere to [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md).
 - **Zero Token Streaming of Frontend Code**: Extract HTML/CSS/JS via deterministic Python scripts, never via LLM chat generation tokens.
 - **Global Window Scope in JS**: Extracted `static/js/app.js` must maintain global scope variables and functions for inline HTML event handlers.
 - **Verbatim Migration First**: Relocate working functions verbatim into module files before making any algorithmic changes or optimizations.
 - **Milestone Checks**: After every package extraction, compile with `python3 -m py_compile` and verify API endpoints return `200 OK` before checking off tasks.
+
+## 7. Anti-AI-Bloat Lifecycle: Standardized Feature Operations
+To prevent multi-stage AI sessions from accumulating redundant functions, duplicated normalizers, or orphaned code:
+
+### 1. How to Add a New Feature
+1. **Locate the Single Source of Truth**:
+   - File parsing $\rightarrow$ [`parsing/`](file:///home/essam/Projects/Indexer/parsing)
+   - String/phone/Arabic normalization $\rightarrow$ [`core/normalizers.py`](file:///home/essam/Projects/Indexer/core/normalizers.py)
+   - SQLite queries & schema $\rightarrow$ [`storage/`](file:///home/essam/Projects/Indexer/storage)
+   - Concurrency & threads $\rightarrow$ [`services/`](file:///home/essam/Projects/Indexer/services)
+   - HTTP routes & serialization $\rightarrow$ [`web/routes.py`](file:///home/essam/Projects/Indexer/web/routes.py) & [`web/http_utils.py`](file:///home/essam/Projects/Indexer/web/http_utils.py)
+2. **Never inline domain logic**: Never define private helper normalizers, raw SQL queries, or nested parser loops inside endpoint handlers or ingestion scripts. Import existing domain functions.
+3. **Register Route**: Add the endpoint to [`web/routes.py`](file:///home/essam/Projects/Indexer/web/routes.py) mapping cleanly to a handler in [`web/handlers/`](file:///home/essam/Projects/Indexer/web/handlers).
+4. **Add Unit Test**: Add test coverage to [`tests/`](file:///home/essam/Projects/Indexer/tests) and verify with `python3 -m unittest discover tests/`.
+
+### 2. How to Edit an Existing Feature
+1. **Search for Existing Implementations**: Grep the codebase before adding new code. If modifying behavior, modify the shared module directly (e.g. `core/normalizers.py` or `storage/search_repository.py`), not callers.
+2. **Maintain Interface Contracts**: Keep function signatures backward-compatible so CLI utilities (`search.py`, `index_sheets.py`) and background services continue functioning seamlessly.
+3. **Run Regression Tests**: Always execute `python3 -m unittest discover tests/` before completing an edit.
+
+### 3. How to Remove a Feature
+1. **Remove Route Entry**: Delete endpoint registration in [`web/routes.py`](file:///home/essam/Projects/Indexer/web/routes.py).
+2. **Remove Controller Logic**: Delete corresponding method in `web/handlers/*.py`.
+3. **Prune Dead Storage Methods**: Remove unused queries from `storage/`. Do not leave "commented out" or "deprecated" dead code.
+4. **Prune Frontend Assets**: Remove related buttons, event handlers, and modals from `templates/index.html` and `static/js/app.js`.
+5. **Verify Clean Syntax**: Run `python3 -m py_compile app.py` and run tests.
+
 

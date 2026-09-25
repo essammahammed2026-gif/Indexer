@@ -68,3 +68,19 @@ python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py
   curl -s "http://localhost:8088/api/search?q=test" | grep '"ok": true'
   ```
 
+## 7. Operational Workflow for Modifying or Adding Features
+Follow these steps whenever a task asks to add, edit, or remove a feature:
+1. **Check Existing Modules First**:
+   - Do not write new helper functions without inspecting `parsing/`, `core/normalizers.py`, and `storage/`.
+2. **Follow the Route Dispatcher Pattern**:
+   - Register endpoints in `web/routes.py`.
+   - Implement handlers in `web/handlers/` using `web.http_utils.send_json` and `read_json_body`.
+3. **Verify with Full Suite**:
+   ```bash
+   python3 -m py_compile app.py core/*.py storage/*.py parsing/*.py services/*.py web/*.py web/handlers/*.py
+   python3 -m unittest discover tests/
+   ```
+4. **Smoke Test Web GUI**:
+   - Ensure the server starts clean (`python3 -u app.py`) and responds to HTTP requests.
+
+

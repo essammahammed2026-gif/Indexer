@@ -4,31 +4,29 @@ Zero external pip dependencies.
 """
 
 import os
-import json
 from services import (
     BASE_DIR,
     APP_CONFIG,
     sync_active_db_vars,
     save_config
 )
+from ..http_utils import read_json_body, send_json, send_success, send_error
 
 def handle_get_settings(handler, parsed):
-    handler.send_response(200)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.end_headers()
-    handler.wfile.write(json.dumps({
-        "ok": True,
-        "db_storage_dir": APP_CONFIG.get("db_storage_dir", BASE_DIR),
-        "watcher_settings": APP_CONFIG.get("watcher_settings", {}),
-        "active_db": APP_CONFIG.get("active_db", "default")
-    }).encode("utf-8"))
+    send_success(
+        handler,
+        db_storage_dir=APP_CONFIG.get("db_storage_dir", BASE_DIR),
+        watcher_settings=APP_CONFIG.get("watcher_settings", {}),
+        active_db=APP_CONFIG.get("active_db", "default")
+    )
 
 def handle_save_settings(handler, parsed):
-    content_length = int(handler.headers.get("Content-Length", 0))
-    body = handler.rfile.read(content_length)
+    data, err = read_json_body(handler)
+    if err:
+        send_error(handler, err, 400)
+        return
     try:
-        data = json.loads(body.decode("utf-8"))
-        storage_dir = data.get("db_storage_dir", "").strip()
+        storage_dir = (data or {}).get("db_storage_dir", "").strip()
         if storage_dir:
             storage_dir = os.path.abspath(storage_dir)
             os.makedirs(storage_dir, exist_ok=True)
@@ -45,12 +43,6 @@ def handle_save_settings(handler, parsed):
                 APP_CONFIG["watcher_settings"]["ignore_hidden_temp"] = bool(ws["ignore_hidden_temp"])
         sync_active_db_vars()
         save_config()
-        handler.send_response(200)
-        handler.send_header("Content-Type", "application/json; charset=utf-8")
-        handler.end_headers()
-        handler.wfile.write(json.dumps({"ok": True, "message": "Settings saved successfully"}).encode("utf-8"))
+        send_success(handler, "Settings saved successfully")
     except Exception as e:
-        handler.send_response(500)
-        handler.send_header("Content-Type", "application/json")
-        handler.end_headers()
-        handler.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        send_error(handler, str(e), 500)

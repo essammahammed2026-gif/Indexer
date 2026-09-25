@@ -92,17 +92,22 @@ Engineered for rapid discovery across massive mixed investigative archives: Tele
 
 | File / Folder | Role & Description |
 | :--- | :--- |
-| [`app.py`](file:///home/essam/Projects/Indexer/app.py) | **Primary Web Server & GUI**: Hosts `http.server` on port 8088. Provides multi-database switching, settings menu, search APIs, native dialog triggers, bookmarks, quick filters, DB backup/restore, desktop launchers, OCR inspectors, and folder watcher thread. |
-| [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md) | **Refactoring Execution Guide**: Master step-by-step checklist, guardrails, and hand-off state for modular decoupling. |
-| [`indexer_engine.py`](file:///home/essam/Projects/Indexer/indexer_engine.py) | **Extraction & Normalization Engine**: XML streaming parsers for `.xlsx`, `.docx`, `.odt`, text/CSV extractors, PDF extraction, ImageMagick preprocessing, Tesseract TSV OCR coordinate generator, and SQLite schema initialization. |
+| [`app.py`](file:///home/essam/Projects/Indexer/app.py) | **Minimal Server Entry Point** (< 80 lines): Loads configuration, launches background directory watcher thread, and bootstraps HTTP server with graceful shutdown handlers. |
+| [`parsing/`](file:///home/essam/Projects/Indexer/parsing) | **Document & Records Parsers**: Decoupled zero-dependency parsing engine for Excel (`.xlsx`, `.xls`), delimited files (`.csv`, `.tsv`), Word (`.docx`, `.odt`), text/logs (`.txt`), PDFs, and OCR image pipelines. |
+| [`core/`](file:///home/essam/Projects/Indexer/core) | **Pure Domain Logic**: Egyptian Arabic phonetic & orthographic normalizer (`normalizers.py`), phone number formatters, Google-style query tokenizer (`query_parser.py`), and Linux OS launchers (`system_interop.py`). |
+| [`storage/`](file:///home/essam/Projects/Indexer/storage) | **Data Access Layer**: Dynamic multi-database SQLite management (`database.py`), high-performance FTS5 trigram search queries (`search_repository.py`), investigative bookmarks (`bookmarks.py`), and event logs (`events.py`). |
+| [`services/`](file:///home/essam/Projects/Indexer/services) | **Background Services & State**: Thread-safe indexing state manager (`state.py`), parallel directory crawler (`indexer_service.py`), and live file system watcher daemon (`watcher_service.py`). |
+| [`web/`](file:///home/essam/Projects/Indexer/web) | **HTTP Transport Layer**: Clean URL router (`router.py`), unified JSON/HTTP serialization helpers (`http_utils.py`), and discrete endpoint handlers in `web/handlers/`. |
+| [`templates/`](file:///home/essam/Projects/Indexer/templates) | **Frontend Templates**: Clean HTML5 document shell (`index.html`) linking dark-mode styling and single-page application logic. |
+| [`static/`](file:///home/essam/Projects/Indexer/static) | **Static UI Assets**: Standalone stylesheet (`css/app.css`) and client-side reactive interface script (`js/app.js`). |
+| [`indexer_engine.py`](file:///home/essam/Projects/Indexer/indexer_engine.py) | **Ingestion Coordinator**: Orchestrates file discovery, column mapping, OCR coordinate extraction, and SQLite batch transactions. |
 | [`index_sheets.py`](file:///home/essam/Projects/Indexer/index_sheets.py) | **Batch Ingestion CLI**: Command-line tool to index an entire folder or individual files recursively with progress statistics. |
 | [`search.py`](file:///home/essam/Projects/Indexer/search.py) | **Terminal Search CLI**: Fast CLI query utility to search phone numbers, names, IDs, or text keywords directly from bash, with `--open` flag for LibreOffice Calc. |
+| [`tests/`](file:///home/essam/Projects/Indexer/tests) | **Automated Test Suite**: Regression test coverage for normalizers, multi-database storage, REST APIs, and document parsers. |
+| [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md) | **Refactoring Execution Guide**: Master step-by-step checklist, guardrails, and hand-off state for modular decoupling. |
 | [`config.json`](file:///home/essam/Projects/Indexer/config.json) | **Runtime Configuration**: Persists active database key, database storage folder, registered databases, nicknames, and fine-tuned watcher settings. |
-| [`sheets_index.db`](file:///home/essam/Projects/Indexer/sheets_index.db) | **SQLite Production Database**: High-performance SQLite database operating in WAL mode. |
 | [`tessdata/`](file:///home/essam/Projects/Indexer/tessdata) | Optional local Tesseract language models (`ara.traineddata`, `eng.traineddata`, `osd.traineddata`). |
-| [`.agents/`](file:///home/essam/Projects/Indexer/.agents) | AI Agent rules, coding standards, architecture constraints, and operational skills. |
-| [`Temp Data/`](file:///home/essam/Projects/Indexer/Temp%20Data) | Historical planning documents, refactoring blueprints, and enterprise scaling proposals. |
-| [`.gitignore`](file:///home/essam/Projects/Indexer/.gitignore) | Git exclusions for SQLite databases, WAL files, uploads, and large models. |
+| [`.agents/`](file:///home/essam/Projects/Indexer/.agents) | AI Agent rules, anti-bloat coding standards, and operational workflows. |
 
 ---
 

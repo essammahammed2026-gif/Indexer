@@ -8,6 +8,7 @@ from .handlers.static_handlers import handle_index_html, handle_static_asset
 from .handlers.search_handlers import (
     handle_stats,
     handle_search,
+    handle_search_csv,
     handle_context,
     handle_get_filters,
     handle_add_filter,
@@ -60,6 +61,7 @@ def create_router():
     # Core Stats & Search
     router.add_route("GET", "/api/stats", handle_stats)
     router.add_route("GET", "/api/search", handle_search)
+    router.add_route("GET", "/api/search/csv", handle_search_csv)
     router.add_route("GET", "/api/context", handle_context)
     router.add_route("GET", "/api/filters", handle_get_filters)
     router.add_route("POST", "/api/filters/add", handle_add_filter)

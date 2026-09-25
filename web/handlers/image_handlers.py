@@ -4,10 +4,10 @@ Zero external pip dependencies.
 """
 
 import os
-import json
 import urllib.parse
 import storage
 from services import get_active_db_path
+from ..http_utils import send_success, send_error
 
 def handle_image_view(handler, parsed):
     qs = urllib.parse.parse_qs(parsed.query)
@@ -33,16 +33,11 @@ def handle_image_view(handler, parsed):
         handler.end_headers()
         handler.wfile.write(data)
     except Exception as e:
-        handler.send_response(500)
-        handler.end_headers()
-        handler.wfile.write(str(e).encode("utf-8"))
+        send_error(handler, str(e), 500)
 
 def handle_image_boxes(handler, parsed):
     qs = urllib.parse.parse_qs(parsed.query)
     file_path = qs.get("file", [""])[0]
     sheet_name = qs.get("sheet", ["Image"])[0]
     box_data = storage.get_ocr_boxes(get_active_db_path(), file_path, sheet_name=sheet_name)
-    handler.send_response(200)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.end_headers()
-    handler.wfile.write(json.dumps({"ok": True, "data": box_data}).encode("utf-8"))
+    send_success(handler, data=box_data)

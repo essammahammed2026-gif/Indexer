@@ -256,6 +256,27 @@ flowchart TD
 - [x] **Check 6.8:** CLI tools (`index_sheets.py`, `search.py`) execute properly against the new package structure.
 - [x] **Check 6.9:** Commit final checkpoint: `git commit -m "refactor(complete): fully decoupled modular architecture with verified regression tests"`.
 
+---
+
+### Phase 7: Deep Engine De-bloating, Unified Parsing & Anti-AI-Bloat Guardrails
+- [x] **Task 7.1:** Extract pure Python parsers into decoupled `parsing/` module:
+  - `parsing/spreadsheet_parser.py`: `.xlsx` (zipfile + xml.etree streaming), `.csv`, `.xls` (LibreOffice / binary fallback).
+  - `parsing/document_parser.py`: `.docx`, `.odt`, `.txt`, `.pdf` (pdftotext + OCR fallback), image wrappers.
+  - `parsing/ocr_parser.py`: ImageMagick preprocessing pipeline and Tesseract TSV bounding box extractor.
+  - `parsing/__init__.py`: Central `parse_document()` dispatcher.
+- [x] **Task 7.2:** Clean `indexer_engine.py`:
+  - Eliminate nested repetitive function definitions (`_extract_cell_value` made top-level static).
+  - Delegate schema creation directly to `storage.init_tables()`.
+  - Remove redundant inline normalization functions.
+- [x] **Task 7.3:** Web API Standardization:
+  - Create `web/http_utils.py` providing unified JSON request parsing, response formatting, and error handling.
+  - Refactor all 6 web handlers to use `http_utils.py`, removing ~200 lines of duplicate serialization.
+  - Fix missing `/api/search/csv` endpoint for frontend CSV search export.
+- [x] **Task 7.4:** CLI Unification:
+  - Refactor `search.py` to route through `storage.query_db()` and `core.system_interop.open_in_app()`.
+- [x] **Task 7.5:** Automated Test Suite Expansion:
+  - Created `tests/test_parsing.py` for `.xlsx`, `.csv`, `.docx`, and `.txt` parsing verification.
+  - Run all 20 tests: `python3 -m unittest discover tests/` $\rightarrow$ 20/20 PASS.
 
 ---
 
