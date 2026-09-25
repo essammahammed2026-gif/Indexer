@@ -1297,7 +1297,38 @@
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, #38bdf8, #10b981);
-    transition: width 0.3s ease;
+    transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .btn-progress-ctrl {
+    background: #1e293b;
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .btn-progress-ctrl:hover {
+    background: #334155;
+    border-color: #64748b;
+  }
+  .btn-progress-ctrl.stop {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+  .btn-progress-ctrl.stop:hover {
+    background: #ef4444;
+    color: #ffffff;
+    border-color: #ef4444;
+  }
+  .bg-completed-banner {
+    animation: fadeInSlide 0.3s ease;
+  }
+  @keyframes fadeInSlide {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   /* Modals */

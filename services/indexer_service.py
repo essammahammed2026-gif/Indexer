@@ -65,13 +65,41 @@ def index_single_target(target_path, db_path=None):
     conn.close()
     return True, f"Indexed {len(files_to_index)} item(s) successfully ({total_cnt:,} records)", total_cnt, scanned
 
-def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False, nickname=None, db_key=None):
+import time
+
+def pause_indexing():
+    """Pause active indexing loop."""
+    with INDEX_LOCK:
+        if INDEX_STATE["running"] and not INDEX_STATE["paused"]:
+            INDEX_STATE["paused"] = True
+            INDEX_STATE["status_message"] = "Indexing paused"
+            return True, "Indexing paused"
+    return False, "Indexing is not active or already paused"
+
+def resume_indexing():
+    """Resume paused indexing loop."""
+    with INDEX_LOCK:
+        if INDEX_STATE["running"] and INDEX_STATE["paused"]:
+            INDEX_STATE["paused"] = False
+            INDEX_STATE["status_message"] = "Indexing resumed..."
+            return True, "Indexing resumed"
+    return False, "Indexing is not paused"
+
+def stop_indexing():
+    """Stop active indexing and delete incomplete database index files from system."""
+    with INDEX_LOCK:
+        if INDEX_STATE["running"]:
+            INDEX_STATE["stopped"] = True
+            INDEX_STATE["paused"] = False
+            INDEX_STATE["status_message"] = "Stopping and cleaning up index..."
+            return True, "Stopping indexing..."
+    return False, "Indexing is not active"
+
+def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False, nickname=None, db_key=None, target_db_path=None):
     """
-    Run folder scan & index with live progress tracking & auto-backup.
-    - force_reindex=True: clears existing index and rebuilds from scratch.
-    - force_refresh=True: rechecks files against database mtime/size.
-    - nickname: Optional nickname for this database.
-    - db_key: Optional existing or new database profile key.
+    Run folder scan & index in background with live progress tracking.
+    - target_db_path: Path to target database (allows user to keep using current active DB).
+    - Supports pause, resume, and stop-with-cleanup.
     """
     if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
         return False, f"Folder does not exist: {folder_path}"
@@ -80,27 +108,37 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
         if INDEX_STATE["running"]:
             return False, "Indexing is already in progress!"
         INDEX_STATE["running"] = True
+        INDEX_STATE["paused"] = False
+        INDEX_STATE["stopped"] = False
         INDEX_STATE["folder"] = folder_path
         INDEX_STATE["current"] = 0
         INDEX_STATE["total"] = 0
         INDEX_STATE["percent"] = 0
         INDEX_STATE["records_indexed"] = 0
+        INDEX_STATE["db_id"] = db_key
+        INDEX_STATE["db_path"] = target_db_path or get_active_db_path()
+        INDEX_STATE["nickname"] = nickname or (db_key or "Index")
+        INDEX_STATE["completed_db_id"] = None
+        INDEX_STATE["completed_nickname"] = None
+
         if force_reindex:
-            INDEX_STATE["current_file"] = "Creating safety backup & wiping index for full rebuild..."
+            INDEX_STATE["current_file"] = "Wiping existing index for full rebuild..."
             INDEX_STATE["status_message"] = "Preparing complete re-index..."
         elif force_refresh:
             INDEX_STATE["current_file"] = "Scanning for added, modified or moved documents..."
             INDEX_STATE["status_message"] = "Checking for file changes..."
         else:
-            INDEX_STATE["current_file"] = "Creating safety backup & scanning folder..."
+            INDEX_STATE["current_file"] = "Scanning folder structure..."
             INDEX_STATE["status_message"] = "Scanning folder..."
 
     def _worker():
+        target_path = INDEX_STATE["db_path"]
+        stopped = False
         try:
-            active_db_path = get_active_db_path()
-            if os.path.exists(active_db_path):
-                storage.backup_database(active_db_path)
+            if not target_path:
+                target_path = get_active_db_path()
 
+            # Fast directory file scan
             all_files = []
             for root, dirs, files in os.walk(folder_path):
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -109,8 +147,13 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                     if ext in SUPPORTED_EXTENSIONS and not f.startswith('~$') and not f.startswith('.'):
                         all_files.append(os.path.join(root, f))
 
-            files_to_process = all_files
-            conn = storage.get_connection(active_db_path)
+            INDEX_STATE["total"] = len(all_files)
+            if not all_files:
+                INDEX_STATE["status_message"] = "No supported files found in folder"
+                INDEX_STATE["percent"] = 100
+                return
+
+            conn = storage.get_connection(target_path)
             indexer_engine.init_db(conn)
 
             if force_reindex:
@@ -121,14 +164,27 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                 cur.execute("DELETE FROM ocr_boxes;")
                 conn.commit()
 
-            INDEX_STATE["total"] = len(files_to_process)
             total_records = 0
 
-            for idx, fpath in enumerate(files_to_process):
+            for idx, fpath in enumerate(all_files):
+                # Check for stop request
+                if INDEX_STATE.get("stopped"):
+                    stopped = True
+                    break
+
+                # Handle pause loop
+                while INDEX_STATE.get("paused") and not INDEX_STATE.get("stopped"):
+                    time.sleep(0.3)
+
+                if INDEX_STATE.get("stopped"):
+                    stopped = True
+                    break
+
                 fname = os.path.basename(fpath)
                 INDEX_STATE["current"] = idx + 1
                 INDEX_STATE["current_file"] = fname
-                INDEX_STATE["percent"] = round(((idx + 1) / max(len(files_to_process), 1)) * 100, 1)
+                INDEX_STATE["percent"] = round(((idx + 1) / max(len(all_files), 1)) * 100, 1)
+                INDEX_STATE["status_message"] = f"Indexing file {idx + 1} of {len(all_files)}"
 
                 try:
                     cnt = indexer_engine.process_file(fpath, conn)
@@ -139,23 +195,42 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
 
             conn.close()
 
+            if stopped:
+                # User pressed Stop -> Delete the unfinished index completely from disk & registry
+                INDEX_STATE["status_message"] = "Indexing stopped and index deleted."
+                INDEX_STATE["percent"] = 0
+                if target_path and os.path.exists(target_path):
+                    try:
+                        os.remove(target_path)
+                        for suff in ["-wal", "-shm"]:
+                            if os.path.exists(target_path + suff):
+                                os.remove(target_path + suff)
+                    except Exception as err:
+                        print(f"[CLEANUP ERROR] {err}")
+                if db_key and db_key in APP_CONFIG.get("databases", {}):
+                    APP_CONFIG["databases"].pop(db_key, None)
+                    save_config()
+                return
+
             INDEX_STATE["percent"] = 100
-            INDEX_STATE["status_message"] = f"Completed! Processed {len(files_to_process)} documents ({total_records:,} searchable entries)"
-            
-            WATCHER_CONFIG["folder"] = folder_path
-            WATCHER_CONFIG["active"] = True
-            active_key = APP_CONFIG.get("active_db", "default")
-            if active_key in APP_CONFIG.get("databases", {}):
-                APP_CONFIG["databases"][active_key]["watch_folder"] = folder_path
-                APP_CONFIG["databases"][active_key]["watch_active"] = True
+            INDEX_STATE["status_message"] = f"Completed! Processed {len(all_files)} files ({total_records:,} searchable entries)"
+            INDEX_STATE["completed_db_id"] = db_key
+            INDEX_STATE["completed_nickname"] = nickname or db_key
+
+            # Update database profile with watch folder
+            if db_key and db_key in APP_CONFIG.get("databases", {}):
+                APP_CONFIG["databases"][db_key]["watch_folder"] = folder_path
+                APP_CONFIG["databases"][db_key]["watch_active"] = True
                 if nickname:
-                    APP_CONFIG["databases"][active_key]["nickname"] = nickname
-            save_config()
+                    APP_CONFIG["databases"][db_key]["nickname"] = nickname
+                save_config()
         except Exception as e:
             INDEX_STATE["status_message"] = f"Error during indexing: {e}"
         finally:
             INDEX_STATE["running"] = False
+            INDEX_STATE["paused"] = False
+            INDEX_STATE["stopped"] = False
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
-    return True, "Indexing started"
+    return True, "Indexing started in background"

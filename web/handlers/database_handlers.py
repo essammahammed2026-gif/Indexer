@@ -143,13 +143,10 @@ def handle_delete_database(handler, parsed):
         send_error(handler, err, 400)
         return
     target_id = (data or {}).get("id", "").strip()
-    delete_file = bool((data or {}).get("delete_file", False))
+    delete_file = bool((data or {}).get("delete_file", True))
     dbs = APP_CONFIG.get("databases", {})
     if target_id not in dbs:
         send_error(handler, "Database profile not found", 400)
-        return
-    if len(dbs) <= 1:
-        send_error(handler, "Cannot delete the last remaining database!", 400)
         return
 
     meta = dbs.pop(target_id)
@@ -165,10 +162,10 @@ def handle_delete_database(handler, parsed):
             print(f"[DELETE DB FILE ERROR] {ex}")
 
     if APP_CONFIG.get("active_db") == target_id:
-        APP_CONFIG["active_db"] = list(dbs.keys())[0]
+        APP_CONFIG["active_db"] = ""
         sync_active_db_vars()
     save_config()
-    send_success(handler, "Database removed")
+    send_success(handler, f"Database '{meta.get('nickname', target_id)}' and its index files were deleted successfully.")
 
 def handle_import_database(handler, parsed):
     content_type = handler.headers.get("Content-Type", "")

@@ -418,18 +418,50 @@
 
   <!-- TAB 1: GLOBAL ARCHIVE SEARCH -->
   <div id="tabGlobalPane">
-    <!-- Progress Banner -->
+    <!-- Live Progress Banner with Controls -->
     <div id="progressBanner" class="progress-banner">
       <div class="progress-info">
-        <span id="progressStatus" style="font-weight: 600; color: #f8fafc;">Indexing documents...</span>
-        <span id="progressPercent" style="font-weight: 700; color: var(--accent);">0%</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="icon-slate" id="progressIconSpin">⚡</span>
+          <span id="progressStatus" style="font-weight:600; color:#f8fafc;">Indexing files...</span>
+          <span id="progressFilesRatio" style="font-size:0.78rem; color:var(--text-dim); font-family:'JetBrains Mono', monospace;">(0 / 0 files)</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span id="progressPercent" style="font-weight:700; color:var(--accent); font-family:'JetBrains Mono', monospace;">0%</span>
+          <div class="progress-controls" style="display:flex; gap:6px;">
+            <button id="btnPauseIndex" class="btn-progress-ctrl" onclick="togglePauseIndexing()" title="Pause Indexing">⏸ Pause</button>
+            <button id="btnStopIndex" class="btn-progress-ctrl stop" onclick="confirmStopIndexing()" title="Stop and delete unfinished index">⏹ Stop</button>
+          </div>
+        </div>
       </div>
       <div class="progress-bar-bg">
         <div id="progressBarFill" class="progress-bar-fill"></div>
       </div>
-      <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.76rem; color:var(--text-muted);">
-        <span id="progressCurrentFile">Scanning...</span>
-        <span id="progressRecords">0 records indexed</span>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:0.76rem; color:var(--text-muted);">
+        <div style="display:flex; align-items:center; gap:6px; min-width:0; overflow:hidden;">
+          <span style="color:var(--text-dim);">📄 Current:</span>
+          <span id="progressCurrentFile" style="font-family:'JetBrains Mono', monospace; color:#cbd5e1; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; max-width:480px;">Scanning folder...</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+          <span id="progressDbTargetBadge" style="font-size:0.72rem; padding:2px 6px; border-radius:4px; background:#1e293b; color:var(--accent);">Target Index</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Background Indexing Completion Prompt Banner -->
+    <div id="bgIndexCompletedBanner" class="progress-banner bg-completed-banner" style="display:none; border-color:#10b981; background:rgba(16, 185, 129, 0.08);">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:1.3rem;">🎉</span>
+          <div>
+            <div style="font-weight:600; color:#f8fafc; font-size:0.88rem;" id="bgIndexCompletedTitle">New database index is ready!</div>
+            <div style="font-size:0.76rem; color:var(--text-dim);" id="bgIndexCompletedSub">Indexing completed in background. Switch now to view records.</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-header primary" id="btnSwitchToCompleted" onclick="switchToCompletedIndex()" style="padding:4px 12px; font-size:0.78rem;">Switch Now</button>
+          <button class="btn-header" onclick="dismissCompletedIndexBanner()" style="padding:4px 8px; font-size:0.78rem;">Dismiss</button>
+        </div>
       </div>
     </div>
 

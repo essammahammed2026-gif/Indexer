@@ -770,19 +770,20 @@ async function renameDatabasePrompt(id, currentNick) {
 }
 
 async function deleteDatabasePrompt(id, nick) {
-  const confirmed = confirm(`Are you sure you want to remove the database profile "${nick}" from the registry?\n\nThe underlying .db file will remain untouched in your storage folder.`);
+  const confirmed = confirm(`Are you sure you want to delete database "${nick}" and all its index files (.db, -wal, -shm) permanently from your system?`);
   if (!confirmed) return;
 
   try {
     const res = await fetch('/api/databases/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id, delete_file: false })
+      body: JSON.stringify({ id: id, delete_file: true })
     });
     const data = await res.json();
     if (data.ok) {
-      showToast(`✅ Removed database "${nick}"`);
-      loadDatabases();
+      showToast(`🗑️ ${data.message || `Deleted database "${nick}" and files`}`);
+      await loadDatabases();
+      await refreshStats();
     } else {
       alert(data.error || "Failed to delete database");
     }
@@ -968,35 +969,156 @@ async function submitFolderIndex() {
   }
 }
 
+let completedDbId = null;
+
 function pollProgress() {
   if (progressPollInterval) clearInterval(progressPollInterval);
   const banner = document.getElementById('progressBanner');
-  banner.style.display = 'block';
+  if (banner) banner.style.display = 'block';
 
   progressPollInterval = setInterval(async () => {
     try {
       const res = await fetch('/api/progress');
       const data = await res.json();
-      
-      const pct = Math.round(data.percent || 0);
-      document.getElementById('progressBarFill').style.width = pct + '%';
-      document.getElementById('progressPercent').innerText = pct + '%';
-      document.getElementById('progressStatus').innerText = data.status || 'Indexing...';
-      document.getElementById('progressCurrentFile').innerText = data.current_file || '';
-      document.getElementById('progressRecords').innerText = `${(data.records_indexed || 0).toLocaleString()} records indexed`;
 
-      if (!data.in_progress && pct >= 100) {
+      const pct = Math.round(data.percent || 0);
+      const fillEl = document.getElementById('progressBarFill');
+      const pctEl = document.getElementById('progressPercent');
+      const statusEl = document.getElementById('progressStatus');
+      const filesRatioEl = document.getElementById('progressFilesRatio');
+      const currentFileEl = document.getElementById('progressCurrentFile');
+      const targetBadgeEl = document.getElementById('progressDbTargetBadge');
+      const pauseBtn = document.getElementById('btnPauseIndex');
+      const stopBtn = document.getElementById('btnStopIndex');
+
+      if (fillEl) fillEl.style.width = pct + '%';
+      if (pctEl) pctEl.innerText = pct + '%';
+
+      const current = data.current || 0;
+      const total = data.total || 0;
+      if (filesRatioEl) {
+        if (total > 0) {
+          filesRatioEl.innerText = `(${current.toLocaleString()} / ${total.toLocaleString()} files)`;
+        } else {
+          filesRatioEl.innerText = `(${current.toLocaleString()} files)`;
+        }
+      }
+
+      if (currentFileEl) {
+        currentFileEl.innerText = data.current_file || 'Scanning folder...';
+        currentFileEl.title = data.current_file || '';
+      }
+
+      if (targetBadgeEl) {
+        targetBadgeEl.innerText = data.nickname ? `Target: ${data.nickname}` : 'Background Index';
+      }
+
+      if (data.is_paused) {
+        if (statusEl) statusEl.innerText = '⏸ Paused';
+        if (pauseBtn) {
+          pauseBtn.innerText = '▶ Resume';
+          pauseBtn.title = 'Resume Indexing';
+        }
+      } else {
+        if (statusEl) statusEl.innerText = data.status || (data.in_progress ? 'Indexing files...' : 'Idle');
+        if (pauseBtn) {
+          pauseBtn.innerText = '⏸ Pause';
+          pauseBtn.title = 'Pause Indexing';
+        }
+      }
+
+      // Check if background indexing completed
+      if (data.completed_db_id) {
+        completedDbId = data.completed_db_id;
+        const compBanner = document.getElementById('bgIndexCompletedBanner');
+        const compTitle = document.getElementById('bgIndexCompletedTitle');
+        const compSub = document.getElementById('bgIndexCompletedSub');
+        if (compBanner) {
+          if (compTitle) compTitle.innerText = `"${data.completed_nickname || data.completed_db_id}" ready!`;
+          if (compSub) compSub.innerText = `Indexed ${data.total || data.current || 0} files. Click "Switch Now" to switch your active view.`;
+          compBanner.style.display = 'block';
+        }
+      }
+
+      if (!data.in_progress && !data.is_paused) {
         clearInterval(progressPollInterval);
-        setTimeout(() => {
-          banner.style.display = 'none';
-          refreshStats();
-          showToast("✅ Indexing completed!");
-        }, 1800);
+        progressPollInterval = null;
+        if (banner) {
+          setTimeout(() => {
+            banner.style.display = 'none';
+          }, 1500);
+        }
+        loadDatabases();
+        refreshStats();
       }
     } catch (e) {
-      console.error(e);
+      console.error("Progress poll error:", e);
     }
-  }, 1000);
+  }, 800);
+}
+
+async function togglePauseIndexing() {
+  const pauseBtn = document.getElementById('btnPauseIndex');
+  const isPaused = pauseBtn && pauseBtn.innerText.includes('Resume');
+  const endpoint = isPaused ? '/api/index/resume' : '/api/index/pause';
+
+  try {
+    const res = await fetch(endpoint, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(isPaused ? '▶ Indexing resumed' : '⏸ Indexing paused');
+    } else {
+      showToast(`⚠️ ${data.error || 'Action failed'}`);
+    }
+  } catch (e) {
+    showToast('❌ Network error communicating with indexing process');
+  }
+}
+
+async function confirmStopIndexing() {
+  const confirmed = confirm("Are you sure you want to stop indexing? All unfinished index data will be permanently deleted.");
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch('/api/index/stop', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('⏹ Indexing stopped and incomplete database files deleted');
+      if (progressPollInterval) {
+        clearInterval(progressPollInterval);
+        progressPollInterval = null;
+      }
+      const banner = document.getElementById('progressBanner');
+      if (banner) banner.style.display = 'none';
+      loadDatabases();
+      refreshStats();
+    } else {
+      alert(data.error || 'Failed to stop indexing');
+    }
+  } catch (e) {
+    showToast('❌ Network error stopping indexer');
+  }
+}
+
+async function switchToCompletedIndex() {
+  if (!completedDbId) {
+    dismissCompletedIndexBanner();
+    return;
+  }
+  const idToSwitch = completedDbId;
+  dismissCompletedIndexBanner();
+  await switchDatabase(idToSwitch);
+}
+
+async function dismissCompletedIndexBanner() {
+  completedDbId = null;
+  const compBanner = document.getElementById('bgIndexCompletedBanner');
+  if (compBanner) compBanner.style.display = 'none';
+  try {
+    await fetch('/api/index/dismiss', { method: 'POST' });
+  } catch (e) {
+    // Ignore network error on dismiss
+  }
 }
 
 function openFilterModal() {

@@ -39,6 +39,10 @@ from .handlers.system_handlers import (
     handle_watch_status,
     handle_watch_toggle,
     handle_index_status,
+    handle_index_pause,
+    handle_index_resume,
+    handle_index_stop,
+    handle_index_dismiss_completion,
     handle_get_notifications,
     handle_read_notifications,
     handle_clear_notifications,
@@ -99,6 +103,10 @@ def create_router():
     router.add_route("POST", "/api/watch/toggle", handle_watch_toggle)
     router.add_route("GET", "/api/index/status", handle_index_status)
     router.add_route("GET", "/api/progress", handle_index_status)
+    router.add_route("POST", "/api/index/pause", handle_index_pause)
+    router.add_route("POST", "/api/index/resume", handle_index_resume)
+    router.add_route("POST", "/api/index/stop", handle_index_stop)
+    router.add_route("POST", "/api/index/dismiss", handle_index_dismiss_completion)
     router.add_route("GET", "/api/notifications", handle_get_notifications)
     router.add_route("POST", "/api/notifications/read", handle_read_notifications)
     router.add_route("POST", "/api/notifications/clear", handle_clear_notifications)

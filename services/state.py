@@ -20,13 +20,20 @@ INDEX_LOCK = threading.Lock()
 # Global indexing progress state
 INDEX_STATE = {
     "running": False,
+    "paused": False,
+    "stopped": False,
     "total": 0,
     "current": 0,
     "current_file": "",
     "records_indexed": 0,
     "percent": 0,
     "folder": "",
-    "status_message": "Idle"
+    "status_message": "Idle",
+    "db_id": None,
+    "db_path": None,
+    "nickname": "",
+    "completed_db_id": None,
+    "completed_nickname": None
 }
 
 # Multi-Database & Watcher App Configuration

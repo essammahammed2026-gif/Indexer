@@ -24,6 +24,9 @@ from services import (
     sync_active_db_vars,
     save_config,
     start_indexing_thread,
+    pause_indexing,
+    resume_indexing,
+    stop_indexing,
     index_single_target
 )
 from ..http_utils import read_json_body, send_json, send_success, send_error
@@ -85,6 +88,7 @@ def handle_watch_toggle(handler, parsed):
 def handle_index_status(handler, parsed):
     resp = dict(INDEX_STATE)
     resp["in_progress"] = INDEX_STATE.get("running", False)
+    resp["is_paused"] = INDEX_STATE.get("paused", False)
     resp["status"] = INDEX_STATE.get("status_message", "")
     send_json(handler, resp)
 
@@ -112,6 +116,33 @@ def handle_clear_notifications(handler, parsed):
     else:
         send_error(handler, msg, 500)
 
+def handle_index_pause(handler, parsed):
+    ok, msg = pause_indexing()
+    if ok:
+        send_success(handler, msg, paused=True)
+    else:
+        send_error(handler, msg, 400)
+
+def handle_index_resume(handler, parsed):
+    ok, msg = resume_indexing()
+    if ok:
+        send_success(handler, msg, paused=False)
+    else:
+        send_error(handler, msg, 400)
+
+def handle_index_stop(handler, parsed):
+    ok, msg = stop_indexing()
+    if ok:
+        send_success(handler, msg, stopped=True)
+    else:
+        send_error(handler, msg, 400)
+
+def handle_index_dismiss_completion(handler, parsed):
+    """Clear completed_db_id once notification has been acknowledged."""
+    INDEX_STATE["completed_db_id"] = None
+    INDEX_STATE["completed_nickname"] = None
+    send_success(handler, "Notification dismissed")
+
 def handle_index_start(handler, parsed):
     qs = urllib.parse.parse_qs(parsed.query)
     folder = qs.get("folder", [""])[0] or WATCHER_CONFIG.get("folder", "")
@@ -124,6 +155,9 @@ def handle_index_start(handler, parsed):
     if not active_key and not create_new_db and folder:
         create_new_db = True
 
+    target_db_id = active_key
+    target_db_path = get_active_db_path()
+
     if create_new_db and folder:
         if not nickname:
             nickname = os.path.basename(folder.rstrip('/')) or "Indexed Folder"
@@ -133,23 +167,35 @@ def handle_index_start(handler, parsed):
         if db_id in APP_CONFIG.get("databases", {}):
             db_id = f"{db_id}_{int(time.time())}"
         fname = f"indexer_{db_id}.db"
+        storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
+        target_db_path = os.path.join(storage_dir, fname)
+
         APP_CONFIG["databases"][db_id] = {
             "nickname": nickname,
             "filename": fname,
             "watch_folder": folder,
-            "watch_active": True,
+            "watch_active": False,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
-        APP_CONFIG["active_db"] = db_id
-        sync_active_db_vars()
+        # Keep user on their currently active database so they can keep working uninterrupted!
+        target_db_id = db_id
         save_config()
-        conn_init = storage.get_connection(get_active_db_path())
+
+        # Initialize schema in new database
+        conn_init = storage.get_connection(target_db_path)
         storage.init_tables(conn_init)
         conn_init.close()
 
-    ok, msg = start_indexing_thread(folder, force_reindex=force_reindex, force_refresh=force_refresh, nickname=nickname)
+    ok, msg = start_indexing_thread(
+        folder,
+        force_reindex=force_reindex,
+        force_refresh=force_refresh,
+        nickname=nickname,
+        db_key=target_db_id,
+        target_db_path=target_db_path
+    )
     if ok:
-        send_success(handler, msg, active_db=APP_CONFIG.get("active_db"))
+        send_success(handler, msg, active_db=APP_CONFIG.get("active_db"), target_db=target_db_id)
     else:
         send_error(handler, msg, 400)
 

@@ -136,12 +136,22 @@ def process_file(fpath, conn):
                 break
 
         for r_idx, row in sheet_rows:
-            # Build text string for universal FTS
-            row_non_empty = [str(c).strip() for c in row if c is not None and str(c).strip()]
-            if not row_non_empty:
+            # Build text string for universal FTS (filtering duplicate values and whitespace)
+            seen_tokens = set()
+            clean_tokens = []
+            for c in row:
+                if c is None:
+                    continue
+                s = str(c).strip()
+                if not s or s in seen_tokens:
+                    continue
+                seen_tokens.add(s)
+                clean_tokens.append(s)
+
+            if not clean_tokens:
                 continue
-            row_str = " | ".join(row_non_empty)
-            fts_batch.append((fpath, sname, r_idx, row_str))
+
+            row_str = " | ".join(clean_tokens)
 
             # CDR extraction
             target_msisdn = None
@@ -187,7 +197,8 @@ def process_file(fpath, conn):
             o_norm = normalize_phone(other_msisdn)
             on_norm = normalize_arabic(str(other_name)) if other_name else None
 
-            if t_norm or o_norm or other_name or other_id:
+            is_cdr = bool(t_norm or o_norm or other_name or other_id)
+            if is_cdr:
                 cdr_batch.append((
                     file_id, sname, r_idx,
                     str(target_msisdn) if target_msisdn is not None else None,
@@ -206,21 +217,28 @@ def process_file(fpath, conn):
                     row_str
                 ))
 
+            # Store in FTS5 index (limit row_str to prevent blowing up DB size for huge blobs)
+            fts_batch.append((fpath, sname, r_idx, row_str[:2000]))
+
+    # Chunked insertions to conserve memory and maintain fast SQLite commit performance
+    CHUNK_SIZE = 5000
     if cdr_batch:
-        cur.executemany("""
-        INSERT INTO cdr_records (
-            file_id, sheet_name, row_idx,
-            target_msisdn, target_norm, other_msisdn, other_norm,
-            other_name, other_name_norm, event_time, duration,
-            direction, other_id, other_address, cell_id, cell_address, raw_row
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, cdr_batch)
+        for i in range(0, len(cdr_batch), CHUNK_SIZE):
+            cur.executemany("""
+            INSERT INTO cdr_records (
+                file_id, sheet_name, row_idx,
+                target_msisdn, target_norm, other_msisdn, other_norm,
+                other_name, other_name_norm, event_time, duration,
+                direction, other_id, other_address, cell_id, cell_address, raw_row
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, cdr_batch[i:i + CHUNK_SIZE])
 
     if fts_batch:
-        cur.executemany("""
-        INSERT INTO universal_search (file_path, sheet_name, row_idx, content)
-        VALUES (?, ?, ?, ?);
-        """, fts_batch)
+        for i in range(0, len(fts_batch), CHUNK_SIZE):
+            cur.executemany("""
+            INSERT INTO universal_search (file_path, sheet_name, row_idx, content)
+            VALUES (?, ?, ?, ?);
+            """, fts_batch[i:i + CHUNK_SIZE])
 
     cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP WHERE file_id = ?;", (file_id,))
     conn.commit()

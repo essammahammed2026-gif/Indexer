@@ -20,7 +20,10 @@ from .state import (
 from .indexer_service import (
     SUPPORTED_EXTENSIONS,
     index_single_target,
-    start_indexing_thread
+    start_indexing_thread,
+    pause_indexing,
+    resume_indexing,
+    stop_indexing
 )
 
 from .watcher_service import (
@@ -42,5 +45,8 @@ __all__ = [
     "SUPPORTED_EXTENSIONS",
     "index_single_target",
     "start_indexing_thread",
+    "pause_indexing",
+    "resume_indexing",
+    "stop_indexing",
     "folder_watcher_loop"
 ]
