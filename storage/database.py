@@ -16,7 +16,10 @@ def get_connection(db_path, readonly=False):
     - 30-second busy timeout to avoid locked errors
     """
     if not db_path:
-        db_path = os.path.join(BASE_DIR, "sheets_index.db")
+        conn = sqlite3.connect(":memory:", timeout=30.0)
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        init_tables(conn)
+        return conn
     
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.execute("PRAGMA journal_mode = WAL;")

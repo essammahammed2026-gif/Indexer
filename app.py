@@ -18,8 +18,8 @@ from web import run_server
 PORT = 8088
 
 def main():
-    # 1. Initialize configuration and active database state
-    load_config()
+    # 1. Initialize configuration with empty starting database
+    load_config(startup=True)
 
     # 2. Start live directory watcher in background daemon thread
     watcher_thread = threading.Thread(target=folder_watcher_loop, daemon=True)

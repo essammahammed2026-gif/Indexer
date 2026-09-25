@@ -22,7 +22,7 @@ from ..http_utils import read_json_body, send_json, send_success, send_error
 
 def handle_list_databases(handler, parsed):
     storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
-    active_key = APP_CONFIG.get("active_db", "default")
+    active_key = APP_CONFIG.get("active_db", "")
     db_list = []
     for db_key, meta in APP_CONFIG.get("databases", {}).items():
         fname = meta.get("filename", "sheets_index.db")
@@ -55,7 +55,7 @@ def handle_list_databases(handler, parsed):
             "watch_folder": meta.get("watch_folder", ""),
             "watch_active": meta.get("watch_active", False),
             "created_at": meta.get("created_at", ""),
-            "is_active": (db_key == active_key)
+            "is_active": (db_key == active_key and bool(active_key))
         })
     send_success(handler, databases=db_list, active_db=active_key, db_storage_dir=storage_dir)
 
@@ -65,6 +65,16 @@ def handle_switch_database(handler, parsed):
         send_error(handler, err, 400)
         return
     target_id = (data or {}).get("id", "").strip()
+    if target_id in ("", "none", "empty"):
+        with INDEX_LOCK:
+            if INDEX_STATE["running"]:
+                send_error(handler, "Cannot switch database while indexing is in progress!", 400)
+                return
+            APP_CONFIG["active_db"] = ""
+            sync_active_db_vars()
+        send_success(handler, "Unloaded active database", active_db="")
+        return
+
     if not target_id or target_id not in APP_CONFIG.get("databases", {}):
         send_error(handler, f"Database '{target_id}' not found", 400)
         return
@@ -74,7 +84,6 @@ def handle_switch_database(handler, parsed):
             return
         APP_CONFIG["active_db"] = target_id
         sync_active_db_vars()
-        save_config()
     send_success(handler, f"Switched to {APP_CONFIG['databases'][target_id].get('nickname')}", active_db=target_id)
 
 def handle_rename_database(handler, parsed):

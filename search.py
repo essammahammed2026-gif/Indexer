@@ -16,7 +16,18 @@ def main():
     load_config()
     db_path = get_active_db_path()
 
-    if not os.path.exists(db_path):
+    if not db_path or not os.path.exists(db_path):
+        from services.state import APP_CONFIG, BASE_DIR
+        storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
+        for key, meta in APP_CONFIG.get("databases", {}).items():
+            candidate = os.path.join(storage_dir, meta.get("filename", ""))
+            if os.path.exists(candidate):
+                db_path = candidate
+                break
+        if not db_path and os.path.exists(os.path.join(BASE_DIR, "sheets_index.db")):
+            db_path = os.path.join(BASE_DIR, "sheets_index.db")
+
+    if not db_path or not os.path.exists(db_path):
         print(f"Error: Database index '{db_path}' not found. Please index documents first.")
         sys.exit(1)
 

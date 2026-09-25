@@ -300,16 +300,16 @@
       </h1>
       <span class="subtitle">Universal Records & Document Engine</span>
       <span id="currentFolderTag" style="display:inline-flex; align-items:center; gap:5px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:3px 9px; font-size:0.75rem; color:var(--text-muted); font-family:'JetBrains Mono', monospace; cursor:pointer;" onclick="openFolderModal()" title="Current active watch & index directory (click to change)">
-        📁 <span id="currentFolderText">Loading folder...</span>
+        📁 <span id="currentFolderText">No folder loaded</span>
       </span>
     </div>
 
     <div class="header-actions">
       <!-- Database Switcher Dropdown -->
       <div class="dropdown" id="dbDropdown">
-        <button class="db-switch-pill" onclick="toggleDbDropdown(event)" title="Current active database index. Click to switch or create databases.">
+        <button class="db-switch-pill no-db" onclick="toggleDbDropdown(event)" title="Current active database index. Click to choose or switch database.">
           <span class="icon-slate" id="headerDbIcon"></span>
-          <span id="activeDbName">Main Database</span> ▾
+          <span id="activeDbName">Select Index (Empty)</span> ▾
         </button>
         <div class="dropdown-content db-dropdown-content" id="dbDropdownContent">
           <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid var(--border-subtle); margin-bottom:8px;">
@@ -329,11 +329,11 @@
 
       <!-- Minimalist Watcher Toggle Switch -->
       <div class="watcher-switch" id="watcherBadge" onclick="toggleWatcher()" title="Click to toggle continuous file monitoring">
-        <span class="watcher-dot active" id="watcherDot"></span>
-        <span id="watcherLabel" style="color:#10b981;">Watching</span>
+        <span class="watcher-dot paused" id="watcherDot"></span>
+        <span id="watcherLabel" style="color:#94a3b8;">Watcher Inactive</span>
       </div>
 
-      <span class="stats-pill" id="statsBadge">Loading...</span>
+      <span class="stats-pill" id="statsBadge">No database loaded</span>
 
       <!-- Notification Bell with Badge & Dropdown -->
       <div class="dropdown" id="notifDropdown">
@@ -522,8 +522,11 @@
 
     <!-- Results Containers -->
     <div id="cardsContainer" class="cards-container">
-      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
-        Enter any keyword, name, or phone number above to search across the entire archive.
+      <div id="cardsInitialPlaceholder" style="text-align:center; padding: 48px 20px; color:var(--text-muted); background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle); width:100%;">
+        <div style="font-size:2rem; margin-bottom:8px;">🗄️</div>
+        <div style="font-weight:600; color:var(--text-main); font-size:1.05rem; margin-bottom:6px;">No Database Index Loaded</div>
+        <div style="font-size:0.84rem; color:var(--text-dim); margin-bottom:14px;">Select an index from the dropdown list above to begin searching, or create a new index.</div>
+        <button class="btn-header primary" onclick="toggleDbDropdown(event)">📂 Choose Database Index ▾</button>
       </div>
     </div>
 

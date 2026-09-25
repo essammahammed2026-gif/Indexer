@@ -12,9 +12,18 @@ from datetime import datetime
 import indexer_engine
 
 try:
-    from services.state import load_config, get_active_db_path
+    from services.state import load_config, get_active_db_path, APP_CONFIG, BASE_DIR
     load_config()
     DB_PATH = get_active_db_path()
+    if not DB_PATH:
+        storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
+        for key, meta in APP_CONFIG.get("databases", {}).items():
+            candidate = os.path.join(storage_dir, meta.get("filename", ""))
+            if os.path.exists(candidate):
+                DB_PATH = candidate
+                break
+        if not DB_PATH:
+            DB_PATH = os.path.join(BASE_DIR, "sheets_index.db")
 except Exception:
     DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheets_index.db")
 

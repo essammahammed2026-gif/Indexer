@@ -68,8 +68,14 @@ def handle_watch_status(handler, parsed):
     send_json(handler, WATCHER_CONFIG)
 
 def handle_watch_toggle(handler, parsed):
+    active_key = APP_CONFIG.get("active_db", "")
+    if not active_key:
+        send_error(handler, "Please select an index database first.", 400)
+        return
     WATCHER_CONFIG["active"] = not WATCHER_CONFIG.get("active", False)
-    save_config()
+    if active_key in APP_CONFIG.get("databases", {}):
+        APP_CONFIG["databases"][active_key]["watch_active"] = WATCHER_CONFIG["active"]
+        save_config()
     send_success(
         handler,
         f"Watcher turned {'ON' if WATCHER_CONFIG['active'] else 'OFF'}",
@@ -113,6 +119,10 @@ def handle_index_start(handler, parsed):
     force_refresh = qs.get("refresh", ["0"])[0] in ("1", "true")
     nickname = qs.get("nickname", [""])[0].strip()
     create_new_db = qs.get("create_db", ["0"])[0] in ("1", "true")
+
+    active_key = APP_CONFIG.get("active_db", "")
+    if not active_key and not create_new_db and folder:
+        create_new_db = True
 
     if create_new_db and folder:
         if not nickname:

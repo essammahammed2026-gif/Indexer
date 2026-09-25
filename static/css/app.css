@@ -178,6 +178,15 @@
     background: var(--bg-card);
     border-color: var(--border-hover);
   }
+  .db-switch-pill.no-db {
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(56, 189, 248, 0.08);
+    color: #38bdf8;
+  }
+  .db-switch-pill.no-db:hover {
+    background: rgba(56, 189, 248, 0.16);
+    border-color: #38bdf8;
+  }
   .db-dropdown-content {
     min-width: 290px;
     max-width: 360px;

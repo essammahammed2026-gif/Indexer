@@ -72,5 +72,15 @@ class TestServices(unittest.TestCase):
         self.assertGreater(cnt, 0)
         self.assertEqual(len(scanned), 1)
 
+    def test_empty_startup_behavior(self):
+        state.APP_CONFIG["active_db"] = "default"
+        save_config()
+        # Verify startup=True forces empty active_db
+        load_config(startup=True)
+        self.assertEqual(state.APP_CONFIG["active_db"], "")
+        self.assertEqual(get_active_db_path(), "")
+        self.assertFalse(state.WATCHER_CONFIG["active"])
+        self.assertEqual(state.WATCHER_CONFIG["folder"], "")
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,16 +18,20 @@ from services import (
 from ..http_utils import read_json_body, send_json, send_error, send_success
 
 def handle_stats(handler, parsed):
-    active_key = APP_CONFIG.get("active_db", "default")
+    active_key = APP_CONFIG.get("active_db", "")
     db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
-    nickname = db_meta.get("nickname", "Main Database")
+    nickname = db_meta.get("nickname", "No Database Loaded" if not active_key else "Main Database")
     storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
     folder = WATCHER_CONFIG.get("folder", "")
-    res = storage.get_stats(get_active_db_path(), folder=folder, active_key=active_key, nickname=nickname, storage_dir=storage_dir)
+    active_path = get_active_db_path()
+    res = storage.get_stats(active_path, folder=folder, active_key=active_key, nickname=nickname, storage_dir=storage_dir)
     res["watcher"] = WATCHER_CONFIG.get("active", False)
+    res["has_active_db"] = bool(active_key and active_path and os.path.exists(active_path))
     send_json(handler, res)
 
 def handle_search(handler, parsed):
+    active_key = APP_CONFIG.get("active_db", "")
+    active_path = get_active_db_path()
     qs = urllib.parse.parse_qs(parsed.query)
     q = qs.get("q", [""])[0]
     limit_val = qs.get("limit", ["50"])[0]
@@ -37,7 +41,10 @@ def handle_search(handler, parsed):
     mode_val = qs.get("mode", ["general"])[0].lower()
     limit = int(limit_val) if limit_val.isdigit() else 50
     offset = int(offset_val) if offset_val.isdigit() else 0
-    data = storage.query_db(get_active_db_path(), q, limit=limit, offset=offset, scope_file=scope_file, scope_folder=scope_folder, mode=mode_val)
+    if not active_key or not active_path:
+        send_json(handler, {"rows": [], "total": 0, "limit": limit, "offset": offset, "mode": mode_val, "no_db": True})
+        return
+    data = storage.query_db(active_path, q, limit=limit, offset=offset, scope_file=scope_file, scope_folder=scope_folder, mode=mode_val)
     send_json(handler, data)
 
 def handle_search_csv(handler, parsed):

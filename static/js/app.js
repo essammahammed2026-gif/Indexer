@@ -496,12 +496,23 @@ async function refreshStats() {
   try {
     const res = await fetch('/api/stats');
     const data = await res.json();
-    document.getElementById('statsBadge').innerText = `${(data.files || 0).toLocaleString()} files • ${(data.records || 0).toLocaleString()} entries`;
+    const statsBadge = document.getElementById('statsBadge');
+    const fldEl = document.getElementById('currentFolderText');
+    const fldTag = document.getElementById('currentFolderTag');
+
+    if (!data.has_active_db || !data.active_db) {
+      if (statsBadge) statsBadge.innerText = "No database loaded";
+      if (fldEl) fldEl.innerText = "No folder loaded";
+      if (fldTag) fldTag.title = "No active database index loaded (click to choose)";
+      updateWatcherUI(false);
+      renderInitialEmptyState();
+      return;
+    }
+
+    if (statsBadge) statsBadge.innerText = `${(data.files || 0).toLocaleString()} files • ${(data.records || 0).toLocaleString()} entries`;
     if (typeof data.watcher !== 'undefined') {
       updateWatcherUI(data.watcher);
     }
-    const fldEl = document.getElementById('currentFolderText');
-    const fldTag = document.getElementById('currentFolderTag');
     if (fldEl && data.folder) {
       const parts = data.folder.split('/');
       const shortName = parts.slice(-2).join('/') || data.folder;
@@ -510,6 +521,7 @@ async function refreshStats() {
     } else if (fldEl) {
       fldEl.innerText = "No folder set";
     }
+    renderInitialEmptyState();
   } catch (e) {
     console.error(e);
   }
@@ -577,8 +589,15 @@ async function loadDatabases() {
 
       const activeObj = cachedDatabases.find(d => d.id === data.active_db);
       const activeNameEl = document.getElementById('activeDbName');
-      if (activeNameEl && activeObj) {
-        activeNameEl.innerText = activeObj.nickname || activeObj.id;
+      const activePill = document.querySelector('.db-switch-pill');
+      if (activeNameEl) {
+        if (activeObj && data.active_db) {
+          activeNameEl.innerText = activeObj.nickname || activeObj.id;
+          if (activePill) activePill.classList.remove('no-db');
+        } else {
+          activeNameEl.innerText = "Select Index (Empty)";
+          if (activePill) activePill.classList.add('no-db');
+        }
       }
     }
   } catch (e) {
@@ -586,15 +605,48 @@ async function loadDatabases() {
   }
 }
 
+function renderInitialEmptyState() {
+  const container = document.getElementById('cardsContainer');
+  if (!container) return;
+  const q = (document.getElementById('queryInput')?.value || '').trim();
+  if (q.length > 0) return;
+
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    container.innerHTML = `
+      <div id="cardsInitialPlaceholder" style="text-align:center; padding: 48px 20px; color:var(--text-muted); background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle); width:100%;">
+        <div style="font-size:2rem; margin-bottom:8px;">🗄️</div>
+        <div style="font-weight:600; color:var(--text-main); font-size:1.05rem; margin-bottom:6px;">No Database Index Loaded</div>
+        <div style="font-size:0.84rem; color:var(--text-dim); margin-bottom:14px;">Select an index from the dropdown list above to begin searching, or create a new index.</div>
+        <button class="btn-header primary" onclick="toggleDbDropdown(event)">📂 Choose Database Index ▾</button>
+      </div>
+    `;
+  } else {
+    container.innerHTML = `
+      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle); width:100%;">
+        Enter any keyword, name, or phone number above to search across the entire archive.
+      </div>
+    `;
+  }
+}
+
 function renderDbDropdownList(databases, activeId) {
   const container = document.getElementById('dbListContainer');
   if (!container) return;
   if (!databases || databases.length === 0) {
-    container.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-dim); font-size:0.8rem;">No databases registered yet.</div>';
+    container.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-dim); font-size:0.8rem;">No databases registered yet. Click + New to index a folder.</div>';
     return;
   }
 
   let html = '';
+  if (activeId) {
+    html += `
+      <div class="db-card-item unload-card" onclick="switchDatabase('')" style="margin-bottom:8px; border:1px dashed var(--border); background:rgba(255,255,255,0.02); text-align:center; padding:8px 10px; cursor:pointer; border-radius:6px;">
+        <span style="font-size:0.78rem; color:var(--text-muted);">⚪ <b>Unload Current Index</b> (Empty State)</span>
+      </div>
+    `;
+  }
+
   databases.forEach(db => {
     const isActive = (db.id === activeId);
     const badgeText = `${(db.files_count || 0).toLocaleString()} files • ${(db.records_count || 0).toLocaleString()} records`;
@@ -607,7 +659,7 @@ function renderDbDropdownList(databases, activeId) {
           <div style="flex:1; min-width:0;">
             <div class="db-title-row">
               <span class="db-name">${escapeHtml(db.nickname || db.id)}</span>
-              ${isActive ? '<span class="db-active-badge">ACTIVE</span>' : ''}
+              ${isActive ? '<span class="db-active-badge">ACTIVE</span>' : '<span style="font-size:0.72rem; color:var(--accent); font-weight:600; margin-left:6px; cursor:pointer;">[Click to Load]</span>'}
             </div>
             <div class="db-subtext" title="${escapeHtml(db.path)}">${escapeHtml(db.filename)} ${sizeText ? '• ' + sizeText : ''}</div>
             <div class="db-subtext" style="color:#64748b; margin-top:2px;">📁 ${badgeText} • <span style="font-size:0.7rem;">${watchIndicator}</span></div>
@@ -665,24 +717,28 @@ function renderSettingsDbList(databases, activeId) {
 }
 
 async function switchDatabase(id) {
-  if (!id) return;
   const toolsDd = document.getElementById('dbDropdown');
   if (toolsDd) toolsDd.classList.remove('open');
-  showToast(`🔄 Switching database to ${id}...`);
+  showToast(id ? `🔄 Loading database index...` : `⚪ Unloading database...`);
   try {
     const res = await fetch('/api/databases/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id })
+      body: JSON.stringify({ id: id || "" })
     });
     const data = await res.json();
     if (data.ok) {
-      showToast(`✅ ${data.message || 'Switched database successfully!'}`);
-      loadDatabases();
-      refreshStats();
-      refreshWatcherStatus();
+      showToast(`✅ ${data.message || 'Updated database successfully!'}`);
+      await loadDatabases();
+      await refreshStats();
+      await refreshWatcherStatus();
+      loadQuickFilters();
+      refreshBookmarkCount();
+      fetchNotifications();
       if (currentQuery) {
         doSearch(0);
+      } else {
+        renderInitialEmptyState();
       }
     } else {
       alert(data.error || "Failed to switch database");
@@ -1190,6 +1246,31 @@ function getFileExtBadge(filename) {
 }
 
 function renderViewData(data) {
+  if (data.no_db) {
+    lastResults = [];
+    totalResults = 0;
+    const paginationBar = document.getElementById('paginationBar');
+    const topPaginationBar = document.getElementById('topPaginationBar');
+    if (paginationBar) paginationBar.style.display = 'none';
+    if (topPaginationBar) topPaginationBar.style.display = 'none';
+    const container = document.getElementById('cardsContainer');
+    if (container) {
+      container.innerHTML = `
+        <div style="text-align:center; padding: 48px 20px; color:var(--text-muted); background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle); width:100%;">
+          <div style="font-size:2rem; margin-bottom:8px;">⚠️</div>
+          <div style="font-weight:600; color:#f8fafc; font-size:1.05rem; margin-bottom:6px;">No Database Index Loaded</div>
+          <div style="font-size:0.84rem; color:var(--text-dim); margin-bottom:14px;">Please select an index from the database dropdown above before searching.</div>
+          <button class="btn-header primary" onclick="toggleDbDropdown(event)">📂 Choose Database Index ▾</button>
+        </div>
+      `;
+    }
+    const rc = document.getElementById('resultsCount');
+    if (rc) rc.innerText = "No database loaded";
+    const tm = document.getElementById('timing');
+    if (tm) tm.innerText = "0ms";
+    return;
+  }
+
   lastResults = data.rows || [];
   totalResults = data.total || 0;
   const paginationBar = document.getElementById('paginationBar');
