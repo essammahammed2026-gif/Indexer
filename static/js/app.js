@@ -451,9 +451,9 @@ function toggleGroupByFile() {
 function setTypeFilter(type, btnEl) {
   activeTypeFilter = type;
   document.querySelectorAll('.filter-tabs-row .filter-pill').forEach(el => {
-    if (el.id !== 'btnFilterGroupPill') el.classList.remove('active');
+    el.classList.remove('active');
   });
-  if (btnEl && btnEl.id !== 'btnFilterGroupPill') btnEl.classList.add('active');
+  if (btnEl) btnEl.classList.add('active');
   renderFilteredResults();
 }
 

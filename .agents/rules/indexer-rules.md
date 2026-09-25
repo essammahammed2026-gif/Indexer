@@ -34,10 +34,15 @@
 - Do NOT perform writes concurrently from multiple arbitrary threads without holding appropriate locks or funneling through sequential SQLite commits.
 
 ## 4. Frontend & UI/UX Standards
-- The web interface (`app.py`) is a Single-Page Application (SPA) in pure vanilla HTML5, CSS3, and modern JavaScript.
+- The web interface (`templates/index.html`) is a Single-Page Application (SPA) in pure vanilla HTML5, CSS3 (`static/css/app.css`), and modern JavaScript (`static/js/app.js`).
 - Avoid bulky external CSS/JS frameworks (no Bootstrap, no jQuery, no React).
-- Keep the UI clean, modern, dark-mode focused, and un-cluttered.
-- Use vector SVG icons with consistent color-coding (e.g. Cyan for search, Emerald for success, Rose for danger/targets, Amber for notes/warnings, Indigo/Purple for records).
+- **Restrained Slate & Precision Accent Aesthetic**:
+  - Maintain a clean, professional, dark-slate background palette (`#0b0f17`, `#111827`, `#151e2e`).
+  - Do NOT re-introduce saturated rainbow colors for everyday UI elements. Keep standard navigation, action, and category icons in neutral monochrome (`#94a3b8` / `icon-slate`).
+  - Restrict saturated semantic colors strictly to real system statuses: Emerald (`#10b981`) for live background sync/watcher, Amber (`#fbbf24`) for warnings/unreads, and Rose (`#ef4444`) for destructive deletions.
+- **De-cluttered Layouts**:
+  - Keep primary action buttons focused (e.g. `+ Index Folder`, `Settings`, `Tools ▾`). Consolidate maintenance and destructive operations (Re-Index, Snapshot Backup, Export/Import) inside dropdown menus or settings dialogs rather than cluttering top-level viewports.
+  - Avoid redundant toggle controls across multiple rows (e.g., maintain single clean entry points for view and grouping modes).
 - All image loading in JS must attach `onload` listeners before setting `.src`, and handle `.complete` image states immediately.
 
 ## 5. Scope Separation

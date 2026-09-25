@@ -13,7 +13,7 @@
   <!-- Set Folder Dialog Modal -->
   <div id="folderModal" class="modal-overlay">
     <div class="modal-content">
-      <h3><span class="icon-amber" id="folderModalIcon"></span> <span id="folderModalTitleText">Index Directory</span></h3>
+      <h3><span class="icon-slate" id="folderModalIcon"></span> <span id="folderModalTitleText">Index Directory</span></h3>
       <p>Pick any folder to index recursively across all subfolders and sub-subfolders. All documents (<code>.xlsx</code>, <code>.docx</code>, <code>.pdf</code>, <code>.png</code>, <code>.jpg</code>, <code>.csv</code>) will be parsed and made searchable.</p>
       
       <div style="margin-bottom: 12px;">
@@ -138,7 +138,7 @@
   <!-- Add Quick Filter Modal -->
   <div id="filterModal" class="modal-overlay">
     <div class="modal-content">
-      <h3><span class="icon-pink" id="filterModalIcon"></span> Add Quick Filter</h3>
+      <h3><span class="icon-slate" id="filterModalIcon"></span> Add Quick Filter</h3>
       <p>Create a custom shortcut saved in the database for instant one-click searches.</p>
       <div style="margin-bottom: 10px;">
         <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Filter Label:</label>
@@ -158,14 +158,14 @@
   <!-- Bookmark Modal -->
   <div id="bookmarkModal" class="modal-overlay">
     <div class="modal-content">
-      <h3><span class="icon-pink" id="bookmarkModalIcon"></span> Bookmark / Tag Record</h3>
-      <p id="bookmarkTargetLabel" style="font-family:'JetBrains Mono', monospace; color:#38bdf8;"></p>
+      <h3><span class="icon-slate" id="bookmarkModalIcon"></span> Bookmark / Tag Record</h3>
+      <p id="bookmarkTargetLabel" style="font-family:'JetBrains Mono', monospace; color:var(--accent);"></p>
       <input type="hidden" id="bmFilePath">
       <input type="hidden" id="bmSheetName">
       <input type="hidden" id="bmRowIdx">
       <div style="margin-bottom: 10px;">
         <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Tag / Classification:</label>
-        <select id="bmTagInput" style="width:100%; padding:8px; border-radius:6px; background:#090e1a; color:#fff; border:1px solid var(--border);">
+        <select id="bmTagInput" style="width:100%; padding:8px; border-radius:6px; background:var(--bg-primary); color:#fff; border:1px solid var(--border);">
           <option value="Lead">🌟 Key Lead</option>
           <option value="Suspect">🚨 Target / Suspect</option>
           <option value="Reviewed">✅ Reviewed</option>
@@ -174,7 +174,7 @@
       </div>
       <div style="margin-bottom: 14px;">
         <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Notes / Annotation:</label>
-        <textarea id="bmNotesInput" rows="3" style="width:100%; padding:8px; border-radius:6px; background:#090e1a; color:#fff; border:1px solid var(--border);" placeholder="Add investigative note or reference..."></textarea>
+        <textarea id="bmNotesInput" rows="3" style="width:100%; padding:8px; border-radius:6px; background:var(--bg-primary); color:#fff; border:1px solid var(--border);" placeholder="Add investigative note or reference..."></textarea>
       </div>
       <div class="modal-actions">
         <button class="btn-header" onclick="closeBookmarkModal()">Cancel</button>
@@ -186,9 +186,9 @@
   <!-- Context Preview Modal -->
   <div id="contextModal" class="modal-overlay">
     <div class="modal-content" style="max-width: 700px;">
-      <h3><span class="icon-purple" id="contextModalIcon"></span> Context Window (±3 Lines)</h3>
+      <h3><span class="icon-slate" id="contextModalIcon"></span> Context Window (±3 Lines)</h3>
       <p id="contextFileLabel" style="font-size:0.8rem; color:var(--text-muted); word-break:break-all;"></p>
-      <div id="contextLinesBox" style="background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:12px; max-height:360px; overflow-y:auto; font-family:'JetBrains Mono', monospace; font-size:0.84rem; line-height:1.6;">
+      <div id="contextLinesBox" style="background:var(--bg-primary); border:1px solid var(--border); border-radius:8px; padding:12px; max-height:360px; overflow-y:auto; font-family:'JetBrains Mono', monospace; font-size:0.84rem; line-height:1.6;">
         Loading context...
       </div>
       <div class="modal-actions">
@@ -202,7 +202,7 @@
     <div class="modal-content" style="max-width: 820px; width: 90vw;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px;">
         <h3 style="margin:0; display:flex; align-items:center; gap:8px;">
-          <span class="icon-amber" id="hubBellIcon"></span> Notification Hub & Change History
+          <span class="icon-slate" id="hubBellIcon"></span> Notification Hub & Change History
         </h3>
         <div style="display:flex; gap:8px;">
           <button class="btn-header" onclick="markAllNotificationsRead()" title="Mark all as read">✓ Mark All Read</button>
@@ -213,7 +213,7 @@
       <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom: 14px;">
         Audit trail of all added, modified, renamed, and pruned files automatically tracked by the continuous watcher and manual sync sessions. Persisted in the database.
       </p>
-      <div id="hubNotificationList" style="max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: #090e1a; padding: 6px;">
+      <div id="hubNotificationList" style="max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); padding: 6px;">
         <div style="padding: 24px; text-align: center; color: var(--text-dim);">Loading change log...</div>
       </div>
       <div class="modal-actions" style="margin-top: 14px;">
@@ -228,7 +228,7 @@
     <div class="modal-content image-modal-wide">
       <div class="image-modal-header">
         <div class="image-modal-title">
-          <span class="icon-purple icon-lg" id="imageModalIcon"></span>
+          <span class="icon-slate icon-lg" id="imageModalIcon"></span>
           <div>
             <h3 style="margin:0 0 2px 0;">Image Preview & OCR Inspector</h3>
             <p id="imagePreviewFileLabel" style="font-size:0.78rem; color:var(--text-muted); margin:0; word-break:break-all;"></p>
@@ -295,64 +295,25 @@
   <div class="header">
     <div class="header-brand">
       <h1>
-        <span class="icon-cyan icon-lg" id="appLogoIcon"></span>
+        <span class="icon-slate icon-lg" id="appLogoIcon"></span>
         OmniSearch
       </h1>
-      <span class="subtitle">Universal Archive & Intelligence Explorer</span>
-      <span id="currentFolderTag" style="display:inline-flex; align-items:center; gap:5px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.25); border-radius:6px; padding:2px 8px; font-size:0.75rem; color:#38bdf8; font-family:'JetBrains Mono', monospace; cursor:pointer;" onclick="openFolderModal()" title="Current active watch & index directory (click to change)">
+      <span class="subtitle">Universal Records & Document Engine</span>
+      <span id="currentFolderTag" style="display:inline-flex; align-items:center; gap:5px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:3px 9px; font-size:0.75rem; color:var(--text-muted); font-family:'JetBrains Mono', monospace; cursor:pointer;" onclick="openFolderModal()" title="Current active watch & index directory (click to change)">
         📁 <span id="currentFolderText">Loading folder...</span>
       </span>
     </div>
 
     <div class="header-actions">
-      <!-- Minimalist Watcher Toggle Switch -->
-      <div class="watcher-switch" id="watcherBadge" onclick="toggleWatcher()" title="Click to toggle continuous file monitoring">
-        <span class="watcher-dot active" id="watcherDot"></span>
-        <span id="watcherLabel" style="color:#10b981;">Watcher Active</span>
-      </div>
-
-      <span class="stats-pill" id="statsBadge">Loading...</span>
-
-      <!-- Force Refresh Index (Recheck changes without full re-indexing) -->
-      <button class="btn-header" onclick="triggerForceRefresh()" title="Recheck folder for newly added, modified, or moved files without restarting whole index">
-        <span class="icon-cyan" id="headerRefreshIcon"></span> Refresh
-      </button>
-
-      <!-- Force Re-Index (Wipe current index and re-index from scratch) -->
-      <button class="btn-header" onclick="triggerForceReindex()" title="Delete current index and rebuild completely from scratch" style="border-color: rgba(244, 63, 94, 0.4); color: #fca5a5;">
-        <span class="icon-rose" id="headerReindexIcon"></span> Re-Index
-      </button>
-
-      <!-- Notification Bell with Badge & Dropdown -->
-      <div class="dropdown" id="notifDropdown">
-        <button class="notif-bell-btn" onclick="toggleNotifDropdown(event)" title="Recent file additions, modifications, renames & deletions">
-          <span class="icon-amber" id="headerBellIcon"></span>
-          <span class="notif-badge" id="notifBadge">0</span>
-        </button>
-        <div class="dropdown-content notif-dropdown" id="notifDropdownContent">
-          <div class="notif-header">
-            <h4><span class="icon-amber" id="notifMenuBellIcon"></span> File Changes & Sync Log</h4>
-            <span id="notifUnreadBadge" style="font-size:0.7rem; color:var(--text-muted);">0 unread</span>
-          </div>
-          <div class="notif-list" id="notifDropdownList">
-            <div style="padding:16px; text-align:center; color:var(--text-dim); font-size:0.8rem;">No recent file changes detected</div>
-          </div>
-          <div class="notif-footer">
-            <a class="notif-link" onclick="openNotificationHub()">See all notifications →</a>
-            <a class="notif-link" onclick="markAllNotificationsRead()" style="color:var(--text-muted); font-size:0.75rem;">Mark all read</a>
-          </div>
-        </div>
-      </div>
-
       <!-- Database Switcher Dropdown -->
       <div class="dropdown" id="dbDropdown">
         <button class="db-switch-pill" onclick="toggleDbDropdown(event)" title="Current active database index. Click to switch or create databases.">
-          <span class="icon-cyan" id="headerDbIcon"></span>
+          <span class="icon-slate" id="headerDbIcon"></span>
           <span id="activeDbName">Main Database</span> ▾
         </button>
         <div class="dropdown-content db-dropdown-content" id="dbDropdownContent">
           <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid var(--border-subtle); margin-bottom:8px;">
-            <span style="font-size:0.78rem; font-weight:700; color:#f8fafc; text-transform:uppercase;">Select Database</span>
+            <span style="font-size:0.78rem; font-weight:600; color:var(--text-main); text-transform:uppercase;">Databases</span>
             <button class="btn-header" style="padding:2px 8px; font-size:0.74rem;" onclick="openFolderModal(true)" title="Index a new folder into its own separate database">+ New</button>
           </div>
           <div id="dbListContainer" style="max-height: 280px; overflow-y: auto;">
@@ -366,6 +327,36 @@
         </div>
       </div>
 
+      <!-- Minimalist Watcher Toggle Switch -->
+      <div class="watcher-switch" id="watcherBadge" onclick="toggleWatcher()" title="Click to toggle continuous file monitoring">
+        <span class="watcher-dot active" id="watcherDot"></span>
+        <span id="watcherLabel" style="color:#10b981;">Watching</span>
+      </div>
+
+      <span class="stats-pill" id="statsBadge">Loading...</span>
+
+      <!-- Notification Bell with Badge & Dropdown -->
+      <div class="dropdown" id="notifDropdown">
+        <button class="notif-bell-btn" onclick="toggleNotifDropdown(event)" title="Recent file additions, modifications, renames & deletions">
+          <span class="icon-slate" id="headerBellIcon"></span>
+          <span class="notif-badge" id="notifBadge">0</span>
+        </button>
+        <div class="dropdown-content notif-dropdown" id="notifDropdownContent">
+          <div class="notif-header">
+            <h4><span class="icon-slate" id="notifMenuBellIcon"></span> File Changes & Sync Log</h4>
+            <span id="notifUnreadBadge" style="font-size:0.7rem; color:var(--text-muted);">0 unread</span>
+          </div>
+          <div class="notif-list" id="notifDropdownList">
+            <div style="padding:16px; text-align:center; color:var(--text-dim); font-size:0.8rem;">No recent file changes detected</div>
+          </div>
+          <div class="notif-footer">
+            <a class="notif-link" onclick="openNotificationHub()">See all notifications →</a>
+            <a class="notif-link" onclick="markAllNotificationsRead()" style="color:var(--text-muted); font-size:0.75rem;">Mark all read</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Primary Action: Index Folder -->
       <button class="btn-header primary" onclick="openFolderModal(false)">
         <span class="icon-white" id="headerFolderIcon"></span> + Index Folder
       </button>
@@ -375,29 +366,36 @@
         <span class="icon-slate" id="headerSettingsIcon"></span> Settings
       </button>
 
-      <!-- Tools Dropdown Menu to prevent UI clutter -->
+      <!-- Tools Dropdown Menu -->
       <div class="dropdown" id="toolsDropdown">
         <button class="btn-header" onclick="toggleToolsDropdown(event)">
           <span class="icon-slate" id="toolsIcon"></span> Tools ▾
         </button>
         <div class="dropdown-content">
-          <button class="dropdown-item" onclick="openNotificationHub()">
-            <span class="icon-amber" id="menuNotifIcon"></span> Notification Hub
+          <button class="dropdown-item" onclick="triggerForceRefresh()">
+            <span class="icon-slate" id="headerRefreshIcon"></span> Refresh Changes
           </button>
           <button class="dropdown-item" onclick="viewBookmarks()">
-            <span class="icon-pink" id="menuBookmarkIcon"></span> Bookmarks (<span id="bmCountBadge">0</span>)
+            <span class="icon-slate" id="menuBookmarkIcon"></span> Bookmarks (<span id="bmCountBadge">0</span>)
           </button>
-          <button class="dropdown-item" onclick="triggerBackup()">
-            <span class="icon-emerald" id="menuBackupIcon"></span> Snapshot Backup
-          </button>
-          <button class="dropdown-item" onclick="exportIndex()">
-            <span class="icon-blue" id="menuExportIcon"></span> Export Index (.db)
-          </button>
-          <button class="dropdown-item" onclick="document.getElementById('dbFileInput').click()">
-            <span class="icon-cyan" id="menuImportIcon"></span> Import Index (.db)
+          <button class="dropdown-item" onclick="openNotificationHub()">
+            <span class="icon-slate" id="menuNotifIcon"></span> Notification Hub
           </button>
           <button class="dropdown-item" onclick="exportCSV()">
-            <span class="icon-emerald" id="menuCsvIcon"></span> Export Results CSV
+            <span class="icon-slate" id="menuCsvIcon"></span> Export Results CSV
+          </button>
+          <button class="dropdown-item" onclick="triggerBackup()">
+            <span class="icon-slate" id="menuBackupIcon"></span> Snapshot Backup
+          </button>
+          <button class="dropdown-item" onclick="exportIndex()">
+            <span class="icon-slate" id="menuExportIcon"></span> Export DB
+          </button>
+          <button class="dropdown-item" onclick="document.getElementById('dbFileInput').click()">
+            <span class="icon-slate" id="menuImportIcon"></span> Import DB
+          </button>
+          <div style="border-top: 1px solid var(--border-subtle); margin: 4px 0;"></div>
+          <button class="dropdown-item" onclick="triggerForceReindex()" style="color:#f87171;">
+            <span class="icon-rose" id="headerReindexIcon"></span> Re-Index From Scratch
           </button>
         </div>
       </div>
@@ -407,12 +405,12 @@
   <!-- Top Navigation Tabs -->
   <div class="nav-tabs">
     <button id="tabBtnGlobal" class="nav-tab-btn active" onclick="switchMainTab('global')">
-      <span class="icon-cyan" id="tabGlobalIcon"></span>
+      <span class="icon-slate" id="tabGlobalIcon"></span>
       Universal Archive
       <span class="nav-tab-badge">Full</span>
     </button>
     <button id="tabBtnScoped" class="nav-tab-btn" onclick="switchMainTab('scoped')">
-      <span class="icon-indigo" id="tabScopedIcon"></span>
+      <span class="icon-slate" id="tabScopedIcon"></span>
       Scoped Target Search
       <span class="nav-tab-badge" id="scopedTargetBadge">Folder or File</span>
     </button>
@@ -441,20 +439,20 @@
       <div class="search-mode-row">
         <div class="search-mode-pills">
           <button id="modeBtnGeneral" class="mode-pill active" onclick="setSearchMode('general')" title="Universal full-text document search">
-            <span class="icon-cyan" id="modeGeneralIcon"></span> General Search
+            <span class="icon-slate" id="modeGeneralIcon"></span> General Search
           </button>
           <button id="modeBtnTelecom" class="mode-pill telecom-mode" onclick="setSearchMode('telecom')" title="Investigative phone & CDR records explorer">
-            <span class="icon-emerald" id="modeTelecomIcon"></span> Telecom / CDR Mode
+            <span class="icon-slate" id="modeTelecomIcon"></span> Telecom / CDR Mode
           </button>
         </div>
         <span class="mode-desc-text" id="modeDescText">📄 Universal search across documents, PDFs, OCR, sheets & text</span>
       </div>
 
       <div class="search-bar-row">
-        <span class="search-icon-inside icon-cyan" id="searchHeroIcon"></span>
+        <span class="search-icon-inside icon-slate" id="searchHeroIcon"></span>
         <input type="text" id="queryInput" placeholder="Search keywords, Egyptian/EN names, phones, IDs, snippets, OCR images..." oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
         <button id="clearSearchBtn" class="clear-btn" onclick="clearSearch()" title="Clear">
-          <span class="icon-rose" id="clearSearchIcon"></span>
+          <span class="icon-slate" id="clearSearchIcon"></span>
         </button>
         <button class="btn-search" onclick="doSearch(0)">
           <span class="icon-slate" id="btnSearchIcon"></span> Search
@@ -464,23 +462,19 @@
       <!-- Segmented Category Filters -->
       <div class="filter-tabs-row">
         <button class="filter-pill active" onclick="setTypeFilter('all', this)">
-          <span class="icon-amber" id="filterAllIcon"></span> All
+          <span class="icon-slate" id="filterAllIcon"></span> All
         </button>
         <button class="filter-pill" onclick="setTypeFilter('doc', this)">
-          <span class="icon-rose" id="filterDocIcon"></span> Documents
+          <span class="icon-slate" id="filterDocIcon"></span> Documents
         </button>
         <button class="filter-pill" onclick="setTypeFilter('sheet', this)">
-          <span class="icon-emerald" id="filterSheetIcon"></span> Spreadsheets
+          <span class="icon-slate" id="filterSheetIcon"></span> Spreadsheets
         </button>
         <button class="filter-pill" onclick="setTypeFilter('image', this)">
-          <span class="icon-purple" id="filterImageIcon"></span> Images & OCR
+          <span class="icon-slate" id="filterImageIcon"></span> Images & OCR
         </button>
         <button class="filter-pill" onclick="setTypeFilter('phone', this)">
-          <span class="icon-teal" id="filterPhoneIcon"></span> Phone & CDR
-        </button>
-        <span style="border-left: 1px solid var(--border-subtle); height: 18px; margin: 0 4px;"></span>
-        <button id="btnFilterGroupPill" class="filter-pill" onclick="toggleGroupByFile()" title="Collapse multiple matches under their file / sheet">
-          <span class="icon-indigo" id="filterGroupIcon"></span> Group by File
+          <span class="icon-slate" id="filterPhoneIcon"></span> Phone & CDR
         </button>
       </div>
 
@@ -507,7 +501,7 @@
         </button>
         <div class="view-toggle">
           <button id="btnViewCard" class="view-btn active" onclick="switchView('card')">
-            <span class="icon-indigo" id="viewCardIcon"></span> Cards
+            <span class="icon-slate" id="viewCardIcon"></span> Cards
           </button>
           <button id="btnViewTable" class="view-btn" onclick="switchView('table')">
             <span class="icon-slate" id="viewTableIcon"></span> Dense Grid
