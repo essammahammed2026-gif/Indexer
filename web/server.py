@@ -3,7 +3,7 @@ Built-in HTTP server instance and handler dispatch for Indexer.
 Zero external pip dependencies.
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .routes import create_router
 
 class AppRequestHandler(BaseHTTPRequestHandler):
@@ -21,10 +21,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         pass
 
 def run_server(host="127.0.0.1", port=8088):
-    """Initialize and run the single-threaded or multi-threaded HTTP server."""
+    """Initialize and run the multi-threaded HTTP server."""
     server_address = (host, port)
-    HTTPServer.allow_reuse_address = True
-    httpd = HTTPServer(server_address, AppRequestHandler)
+    ThreadingHTTPServer.allow_reuse_address = True
+    httpd = ThreadingHTTPServer(server_address, AppRequestHandler)
     print(f"\n=======================================================")
     print(f"🚀 Excel & CDR Browser GUI is running at:")
     print(f"👉 http://localhost:{port}")

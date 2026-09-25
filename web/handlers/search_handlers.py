@@ -138,6 +138,12 @@ def handle_export(handler, parsed):
     if not os.path.exists(db_path):
         send_error(handler, "Index database not found", 404)
         return
+    try:
+        conn = storage.get_connection(db_path)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        conn.close()
+    except Exception:
+        pass
     file_size = os.path.getsize(db_path)
     handler.send_response(200)
     handler.send_header("Content-Type", "application/octet-stream")

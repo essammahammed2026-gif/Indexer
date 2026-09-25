@@ -38,9 +38,20 @@ def init_tables(conn):
         file_path TEXT UNIQUE,
         filename TEXT,
         folder TEXT,
+        file_mtime REAL DEFAULT 0,
+        file_size INTEGER DEFAULT 0,
         indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # Migration: add file_mtime and file_size if not present
+    try:
+        cur.execute("ALTER TABLE files ADD COLUMN file_mtime REAL DEFAULT 0;")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE files ADD COLUMN file_size INTEGER DEFAULT 0;")
+    except Exception:
+        pass
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS cdr_records (
@@ -124,4 +135,7 @@ def init_tables(conn):
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_cdr_file_id ON cdr_records(file_id);")
     conn.commit()

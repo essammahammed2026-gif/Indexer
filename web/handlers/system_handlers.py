@@ -200,10 +200,15 @@ def handle_index_start(handler, parsed):
         send_error(handler, msg, 400)
 
 def handle_index_refresh(handler, parsed):
+    active_key = APP_CONFIG.get("active_db", "")
+    target_db_path = get_active_db_path()
+    if not active_key or not target_db_path:
+        send_error(handler, "No active database selected. Please select a database index first.", 400)
+        return
     folder = WATCHER_CONFIG.get("folder", "")
     if not folder:
         try:
-            conn = storage.get_connection(get_active_db_path())
+            conn = storage.get_connection(target_db_path)
             row = conn.cursor().execute("SELECT folder FROM files LIMIT 1;").fetchone()
             if row and row[0]:
                 folder = row[0]
@@ -213,18 +218,25 @@ def handle_index_refresh(handler, parsed):
     if not folder or not os.path.exists(folder):
         send_error(handler, "No indexed folder set to refresh. Please choose a folder.", 400)
     else:
-        ok, msg = start_indexing_thread(folder, force_refresh=True)
+        db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
+        nick = db_meta.get("nickname", active_key)
+        ok, msg = start_indexing_thread(folder, force_refresh=True, nickname=nick, db_key=active_key, target_db_path=target_db_path)
         if ok:
             send_success(handler, msg)
         else:
             send_error(handler, msg, 400)
 
 def handle_index_reindex(handler, parsed):
+    active_key = APP_CONFIG.get("active_db", "")
+    target_db_path = get_active_db_path()
+    if not active_key or not target_db_path:
+        send_error(handler, "No active database selected. Please select a database index first.", 400)
+        return
     qs = urllib.parse.parse_qs(parsed.query)
     folder = qs.get("folder", [""])[0] or WATCHER_CONFIG.get("folder", "")
     if not folder:
         try:
-            conn = storage.get_connection(get_active_db_path())
+            conn = storage.get_connection(target_db_path)
             row = conn.cursor().execute("SELECT folder FROM files LIMIT 1;").fetchone()
             if row and row[0]:
                 folder = row[0]
@@ -234,7 +246,9 @@ def handle_index_reindex(handler, parsed):
     if not folder or not os.path.exists(folder):
         send_error(handler, "No folder specified to re-index.", 400)
     else:
-        ok, msg = start_indexing_thread(folder, force_reindex=True)
+        db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
+        nick = db_meta.get("nickname", active_key)
+        ok, msg = start_indexing_thread(folder, force_reindex=True, nickname=nick, db_key=active_key, target_db_path=target_db_path)
         if ok:
             send_success(handler, msg)
         else:

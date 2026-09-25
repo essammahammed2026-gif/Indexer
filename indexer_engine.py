@@ -64,7 +64,17 @@ def process_file(fpath, conn):
     """
     cur = conn.cursor()
     folder, filename = os.path.split(fpath)
-    cur.execute("INSERT OR IGNORE INTO files (file_path, filename, folder) VALUES (?, ?, ?);", (fpath, filename, folder))
+    file_mtime = 0
+    file_size = 0
+    try:
+        st = os.stat(fpath)
+        file_mtime = st.st_mtime
+        file_size = st.st_size
+    except Exception:
+        pass
+
+    cur.execute("INSERT OR IGNORE INTO files (file_path, filename, folder, file_mtime, file_size) VALUES (?, ?, ?, ?, ?);",
+                (fpath, filename, folder, file_mtime, file_size))
     cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (fpath,))
     file_id = cur.fetchone()[0]
 
@@ -240,6 +250,7 @@ def process_file(fpath, conn):
             VALUES (?, ?, ?, ?);
             """, fts_batch[i:i + CHUNK_SIZE])
 
-    cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP WHERE file_id = ?;", (file_id,))
+    cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP, file_mtime = ?, file_size = ? WHERE file_id = ?;",
+                (file_mtime, file_size, file_id))
     conn.commit()
     return len(fts_batch)

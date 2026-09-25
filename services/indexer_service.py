@@ -164,7 +164,19 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                 cur.execute("DELETE FROM ocr_boxes;")
                 conn.commit()
 
+            # Pre-load existing indexed files for fast mtime/size change detection
+            indexed_meta = {}
+            if not force_reindex:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT file_path, file_mtime, file_size FROM files;")
+                    for r in cur.fetchall():
+                        indexed_meta[r[0]] = (r[1] or 0, r[2] or 0)
+                except Exception:
+                    pass
+
             total_records = 0
+            processed_any = False
 
             for idx, fpath in enumerate(all_files):
                 # Check for stop request
@@ -186,12 +198,36 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                 INDEX_STATE["percent"] = round(((idx + 1) / max(len(all_files), 1)) * 100, 1)
                 INDEX_STATE["status_message"] = f"Indexing file {idx + 1} of {len(all_files)}"
 
+                # On refresh: skip files that haven't changed on disk
+                if force_refresh and fpath in indexed_meta:
+                    try:
+                        st = os.stat(fpath)
+                        prev_mtime, prev_size = indexed_meta[fpath]
+                        if abs(st.st_mtime - prev_mtime) < 0.01 and st.st_size == prev_size:
+                            continue
+                    except Exception:
+                        pass
+
                 try:
                     cnt = indexer_engine.process_file(fpath, conn)
                     total_records += cnt
+                    processed_any = True
                     INDEX_STATE["records_indexed"] = total_records
                 except Exception as ex:
                     print(f"[INDEX ERROR] {fname}: {ex}")
+
+            # Rebuild FTS and reclaim space if files were modified or reindexed
+            if processed_any:
+                try:
+                    conn.execute("INSERT INTO universal_search(universal_search) VALUES('rebuild');")
+                    conn.execute("INSERT INTO universal_search(universal_search) VALUES('optimize');")
+                    conn.commit()
+                except Exception as err:
+                    print(f"[FTS OPTIMIZE] {err}")
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                except Exception:
+                    pass
 
             conn.close()
 

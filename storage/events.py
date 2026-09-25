@@ -146,6 +146,13 @@ def backup_database(db_path):
     if not db_path or not os.path.exists(db_path):
         return False, "Database does not exist yet"
     try:
+        # Flush WAL before snapshot
+        try:
+            conn = get_connection(db_path)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.close()
+        except Exception:
+            pass
         date_str = time.strftime("%Y%m%d")
         snap_path = f"{db_path}.snap_{date_str}"
         shutil.copy2(db_path, snap_path)
