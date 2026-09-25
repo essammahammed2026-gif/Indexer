@@ -11,7 +11,12 @@ import argparse
 from datetime import datetime
 import indexer_engine
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheets_index.db")
+try:
+    from services.state import load_config, get_active_db_path
+    load_config()
+    DB_PATH = get_active_db_path()
+except Exception:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheets_index.db")
 
 def build_index(target_path=None):
     if not target_path:

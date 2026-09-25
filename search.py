@@ -6,7 +6,12 @@ import re
 import subprocess
 import urllib.parse
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheets_index.db")
+try:
+    from services.state import load_config, get_active_db_path
+    load_config()
+    DB_PATH = get_active_db_path()
+except Exception:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheets_index.db")
 
 def open_in_app(file_path, sheet_name=None, row_idx=None):
     if not file_path or not os.path.exists(file_path):

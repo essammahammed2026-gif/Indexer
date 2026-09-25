@@ -135,23 +135,23 @@ flowchart TD
 ## 4. Detailed Step-by-Step Checkmarks & Progress Tracker
 
 ### Phase 0: Safety & Environment Preparation
-- [ ] **Task 0.1:** Verify working directory is clean or stash changes.
-- [ ] **Task 0.2:** Create safety git branch: `git checkout -b refactor/modular-architecture`.
-- [ ] **Task 0.3:** Verify active database (`sheets_index.db`) has a backup copy (`sheets_index.db.snap_*`).
-- [ ] **Task 0.4:** Compile check: `python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py`.
+- [x] **Task 0.1:** Verify working directory is clean or stash changes.
+- [x] **Task 0.2:** Create safety git branch: `git checkout -b refactor/modular-architecture`.
+- [x] **Task 0.3:** Verify active database (`sheets_index.db`) has a backup copy (`sheets_index.db.snap_*`).
+- [x] **Task 0.4:** Compile check: `python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py`.
 
 ---
 
 ### Phase 1: Frontend Decoupling (Presentation Layer)
-- [ ] **Task 1.1:** Create required directories: `mkdir -p static/css static/js templates`.
-- [ ] **Task 1.2:** Write and run a deterministic Python extraction script (`extract_frontend.py`):
+- [x] **Task 1.1:** Create required directories: `mkdir -p static/css static/js templates`.
+- [x] **Task 1.2:** Write and run a deterministic Python extraction script (`extract_frontend.py`):
   - Slice CSS lines (between `<style>` and `</style>`) into `static/css/app.css`.
   - Slice JS lines (between `<script>` and `</script>`) into `static/js/app.js`.
   - Slice HTML DOM lines, replace `<style>` with `<link rel="stylesheet" href="/static/css/app.css">` and `<script>` with `<script src="/static/js/app.js"></script>`, and save to `templates/index.html`.
-- [ ] **Task 1.3:** Update `app.py`:
+- [x] **Task 1.3:** Update `app.py`:
   - Replace raw 4,773-line `HTML_TEMPLATE` with a lightweight function `get_html_template()` reading `templates/index.html`.
   - Add static file handler to `RequestHandler.do_GET` serving `/static/css/*` and `/static/js/*` with path traversal guards (`os.path.commonpath`).
-- [ ] **Task 1.4:** **Milestone 1 Verification:**
+- [x] **Task 1.4:** **Milestone 1 Verification:**
   - Launch `python3 -u app.py`.
   - Run `curl -I http://localhost:8088/` $\rightarrow$ expect `200 OK` (`text/html`).
   - Run `curl -I http://localhost:8088/static/css/app.css` $\rightarrow$ expect `200 OK` (`text/css`).
@@ -161,20 +161,20 @@ flowchart TD
 ---
 
 ### Phase 2: Extract Pure Domain Helpers (`core/`)
-- [ ] **Task 2.1:** Create `core/` package: `mkdir -p core tests && touch core/__init__.py`.
-- [ ] **Task 2.2:** Extract `core/normalizers.py`:
+- [x] **Task 2.1:** Create `core/` package: `mkdir -p core tests && touch core/__init__.py`.
+- [x] **Task 2.2:** Extract `core/normalizers.py`:
   - `normalize_phone(val)`
   - `normalize_arabic(text)`
   - `levenshtein_dist(s1, s2)`
-- [ ] **Task 2.3:** Extract `core/query_parser.py`:
+- [x] **Task 2.3:** Extract `core/query_parser.py`:
   - `parse_google_query(query_str)`
   - `tokenize_query(query)`
-- [ ] **Task 2.4:** Extract `core/system_interop.py`:
+- [x] **Task 2.4:** Extract `core/system_interop.py`:
   - `open_in_app(file_path, sheet_name, row_idx)`
   - `reveal_in_folder(file_path)`
   - Dialog runner functions for `zenity` and `kdialog`.
-- [ ] **Task 2.5:** Update `app.py` to import from `core.*`.
-- [ ] **Task 2.6:** **Milestone 2 Verification:**
+- [x] **Task 2.5:** Update `app.py` to import from `core.*`.
+- [x] **Task 2.6:** **Milestone 2 Verification:**
   - Create `tests/test_normalizers.py` asserting Arabic normalization (`أحمد` $\leftrightarrow$ `احمد`, diacritic stripping) and phone normalization (`+2010...` $\leftrightarrow$ `010...`).
   - Run `python3 -m unittest tests/test_normalizers.py` $\rightarrow$ must pass with 0 errors.
   - Commit milestone: `git commit -m "refactor(phase-2): extract domain normalizers and system interop into core"`.
@@ -182,24 +182,24 @@ flowchart TD
 ---
 
 ### Phase 3: Extract Data Access Layer & Multi-DB (`storage/`)
-- [ ] **Task 3.1:** Create `storage/` package: `mkdir -p storage && touch storage/__init__.py`.
-- [ ] **Task 3.2:** Extract `storage/database.py`:
+- [x] **Task 3.1:** Create `storage/` package: `mkdir -p storage && touch storage/__init__.py`.
+- [x] **Task 3.2:** Extract `storage/database.py`:
   - `get_active_db_path()`
   - Connection factory `get_db_connection(db_path=None)` with WAL mode and pragmas.
   - Table initialization & migrations (`init_db`, `ensure_tables`).
-- [ ] **Task 3.3:** Extract `storage/search_repository.py`:
+- [x] **Task 3.3:** Extract `storage/search_repository.py`:
   - `query_db(query, limit, offset, scope_file, scope_folder, mode)`
   - `get_stats()`
   - `get_quick_filters()`, `add_quick_filter()`, `delete_quick_filter()`
-- [ ] **Task 3.4:** Extract `storage/bookmarks.py`:
+- [x] **Task 3.4:** Extract `storage/bookmarks.py`:
   - `get_bookmarks()`, `add_bookmark()`, `remove_bookmark()`
   - `get_context_window(file_path, sheet_name, row_idx, radius)`
-- [ ] **Task 3.5:** Extract `storage/events.py`:
+- [x] **Task 3.5:** Extract `storage/events.py`:
   - `record_change_event(event_type, file_path, details)`
   - `get_change_events(limit, offset, unread_only)`
   - `mark_change_events_read(event_ids)`
-- [ ] **Task 3.6:** Update `app.py` to route queries via `storage.*`.
-- [ ] **Task 3.7:** **Milestone 3 Verification:**
+- [x] **Task 3.6:** Update `app.py` to route queries via `storage.*`.
+- [x] **Task 3.7:** **Milestone 3 Verification:**
   - Run test query against `sheets_index.db` via `storage.search_repository.query_db`.
   - Verify database switcher endpoint (`/api/databases`) functions accurately.
   - Commit milestone: `git commit -m "refactor(phase-3): extract sqlite repositories and multi-db management into storage"`.
@@ -207,54 +207,55 @@ flowchart TD
 ---
 
 ### Phase 4: Concurrency & Background Services (`services/`)
-- [ ] **Task 4.1:** Create `services/` package: `mkdir -p services && touch services/__init__.py`.
-- [ ] **Task 4.2:** Extract `services/state.py`:
+- [x] **Task 4.1:** Create `services/` package: `mkdir -p services && touch services/__init__.py`.
+- [x] **Task 4.2:** Extract `services/state.py`:
   - Encapsulate `INDEX_STATE`, `INDEX_LOCK`, `WATCHER_CONFIG`, `APP_CONFIG`.
   - Provide thread-safe state getters and setters (`set_index_progress`, `is_indexing_running`).
-- [ ] **Task 4.3:** Extract `services/indexer_service.py`:
+- [x] **Task 4.3:** Extract `services/indexer_service.py`:
   - `start_indexing_thread(folder, nickname, db_key, wipe_first)`
   - Integration with `indexer_engine.py`.
-- [ ] **Task 4.4:** Extract `services/watcher_service.py`:
+- [x] **Task 4.4:** Extract `services/watcher_service.py`:
   - `folder_watcher_loop()` with poll interval, debounce delay, and file size limits.
   - `start_watcher_thread()`, `toggle_watcher()`.
-- [ ] **Task 4.5:** **Milestone 4 Verification:**
+- [x] **Task 4.5:** **Milestone 4 Verification:**
   - Test starting/stopping watcher thread cleanly without race conditions.
   - Commit milestone: `git commit -m "refactor(phase-4): isolate background worker threads and state into services"`.
 
 ---
 
 ### Phase 5: Web Routing, Handlers & Slim Entry Point (`web/` & `app.py`)
-- [ ] **Task 5.1:** Create `web/` and `web/handlers/`:
+- [x] **Task 5.1:** Create `web/` and `web/handlers/`:
   - `mkdir -p web/handlers && touch web/__init__.py web/handlers/__init__.py`.
-- [ ] **Task 5.2:** Implement `web/router.py`:
+- [x] **Task 5.2:** Implement `web/router.py`:
   - Clean URL dispatcher matching `(method, path)` pairs or regex patterns to handler callables.
-- [ ] **Task 5.3:** Implement discrete handler modules in `web/handlers/`:
+- [x] **Task 5.3:** Implement discrete handler modules in `web/handlers/`:
   - `static_handlers.py`: Serves HTML template, CSS, JS, and image thumbnails.
   - `search_handlers.py`: Handles `/api/search`, `/api/context`, `/api/stats`, `/api/filters`.
   - `database_handlers.py`: Handles `/api/databases`, `/api/databases/switch`, `/rename`, `/delete`.
   - `settings_handlers.py`: Handles `/api/settings`, `/api/settings/save`.
   - `bookmark_handlers.py`: Handles `/api/bookmarks/*`.
   - `system_handlers.py`: Handles indexing triggers, watcher toggle, desktop launchers.
-- [ ] **Task 5.4:** Implement `web/server.py`:
+- [x] **Task 5.4:** Implement `web/server.py`:
   - Standard `HTTPServer` wrapper using the router.
-- [ ] **Task 5.5:** Refactor root `app.py` into a minimal entry point (< 80 lines):
+- [x] **Task 5.5:** Refactor root `app.py` into a minimal entry point (< 80 lines):
   - Load config, start background watcher, bind HTTP server, handle graceful SIGINT/SIGTERM shutdown.
-- [ ] **Task 5.6:** **Milestone 5 Verification:**
+- [x] **Task 5.6:** **Milestone 5 Verification:**
   - `python3 -m py_compile app.py web/*.py web/handlers/*.py`.
   - Commit milestone: `git commit -m "refactor(phase-5): implement modular web router and slim down app.py"`.
 
 ---
 
 ### Phase 6: End-to-End Regression Smoke Test
-- [ ] **Check 6.1:** Web GUI loads at `http://localhost:8088/` with full dark-mode styling and icons.
-- [ ] **Check 6.2:** Universal Search works in General Mode (returns document cards, highlights matches).
-- [ ] **Check 6.3:** Telecom CDR Mode works (filters caller, callee, duration, cells).
-- [ ] **Check 6.4:** Database Switcher dropdown lists databases, switches active DB on the fly without server restart.
-- [ ] **Check 6.5:** Settings Modal loads and saves custom storage folder and watcher intervals.
-- [ ] **Check 6.6:** Image OCR preview and bounding boxes render correctly.
-- [ ] **Check 6.7:** Background watcher detects and records file modifications in notification hub.
-- [ ] **Check 6.8:** CLI tools (`index_sheets.py`, `search.py`) execute properly against the new package structure.
-- [ ] **Check 6.9:** Commit final checkpoint: `git commit -m "refactor(complete): fully decoupled modular architecture with verified regression tests"`.
+- [x] **Check 6.1:** Web GUI loads at `http://localhost:8088/` with full dark-mode styling and icons.
+- [x] **Check 6.2:** Universal Search works in General Mode (returns document cards, highlights matches).
+- [x] **Check 6.3:** Telecom CDR Mode works (filters caller, callee, duration, cells).
+- [x] **Check 6.4:** Database Switcher dropdown lists databases, switches active DB on the fly without server restart.
+- [x] **Check 6.5:** Settings Modal loads and saves custom storage folder and watcher intervals.
+- [x] **Check 6.6:** Image OCR preview and bounding boxes render correctly.
+- [x] **Check 6.7:** Background watcher detects and records file modifications in notification hub.
+- [x] **Check 6.8:** CLI tools (`index_sheets.py`, `search.py`) execute properly against the new package structure.
+- [x] **Check 6.9:** Commit final checkpoint: `git commit -m "refactor(complete): fully decoupled modular architecture with verified regression tests"`.
+
 
 ---
 
