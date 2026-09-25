@@ -42,3 +42,11 @@
 
 ## 5. Scope Separation
 - **Indexer** (`/home/essam/Projects/Indexer`) is completely independent from any other projects on the system (e.g., `ESSR_PA`). Never mix files, configurations, or schemas between them.
+
+## 6. Modular Package Refactoring & Session Hand-off Guidelines
+- When refactoring `app.py` into decoupled submodules (`core/`, `storage/`, `services/`, `web/`, `templates/`, `static/`), adhere to [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md).
+- **Zero Token Streaming of Frontend Code**: Extract HTML/CSS/JS via deterministic Python scripts, never via LLM chat generation tokens.
+- **Global Window Scope in JS**: Extracted `static/js/app.js` must maintain global scope variables and functions for inline HTML event handlers.
+- **Verbatim Migration First**: Relocate working functions verbatim into module files before making any algorithmic changes or optimizations.
+- **Milestone Checks**: After every package extraction, compile with `python3 -m py_compile` and verify API endpoints return `200 OK` before checking off tasks.
+

@@ -25,7 +25,6 @@ import tempfile
 import indexer_engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "sheets_index.db")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 PORT = 8088
 
@@ -45,6 +44,28 @@ INDEX_STATE = {
     "status_message": "Idle"
 }
 
+# Multi-Database & Watcher App Configuration
+APP_CONFIG = {
+    "db_storage_dir": BASE_DIR,
+    "active_db": "default",
+    "databases": {
+        "default": {
+            "nickname": "Main Database",
+            "filename": "sheets_index.db",
+            "watch_folder": "",
+            "watch_active": False,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+    },
+    "watcher_settings": {
+        "poll_interval_seconds": 3,
+        "debounce_delay_seconds": 2.0,
+        "max_file_size_mb": 250,
+        "ignore_hidden_temp": True
+    }
+}
+
+DB_PATH = os.path.join(BASE_DIR, "sheets_index.db")
 WATCHER_CONFIG = {
     "folder": "",
     "active": False
@@ -52,18 +73,58 @@ WATCHER_CONFIG = {
 
 INDEX_LOCK = threading.Lock()
 
+def get_active_db_path():
+    """Compute absolute file path to the active SQLite database file."""
+    storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
+    try:
+        os.makedirs(storage_dir, exist_ok=True)
+    except Exception:
+        storage_dir = BASE_DIR
+    active_key = APP_CONFIG.get("active_db", "default")
+    db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
+    fname = db_meta.get("filename") or "sheets_index.db"
+    return os.path.join(storage_dir, fname)
+
+def sync_active_db_vars():
+    """Keep global DB_PATH and WATCHER_CONFIG in sync with the active database profile."""
+    global DB_PATH, WATCHER_CONFIG
+    DB_PATH = get_active_db_path()
+    active_key = APP_CONFIG.get("active_db", "default")
+    db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
+    WATCHER_CONFIG["folder"] = db_meta.get("watch_folder", "")
+    WATCHER_CONFIG["active"] = db_meta.get("watch_active", False)
+
 def load_config():
-    global WATCHER_CONFIG
+    global APP_CONFIG, WATCHER_CONFIG, DB_PATH
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                WATCHER_CONFIG["folder"] = data.get("watch_folder", "")
-                WATCHER_CONFIG["active"] = data.get("watch_active", True if WATCHER_CONFIG["folder"] else False)
+            # Backward compatibility migration from old config format
+            if "watch_folder" in data and "databases" not in data:
+                old_folder = data.get("watch_folder", "")
+                old_active = data.get("watch_active", False)
+                APP_CONFIG["databases"]["default"]["watch_folder"] = old_folder
+                APP_CONFIG["databases"]["default"]["watch_active"] = old_active
+                if old_folder:
+                    APP_CONFIG["databases"]["default"]["nickname"] = os.path.basename(old_folder.rstrip('/')) or "Main Database"
+            else:
+                if "db_storage_dir" in data:
+                    APP_CONFIG["db_storage_dir"] = data["db_storage_dir"]
+                if "active_db" in data:
+                    APP_CONFIG["active_db"] = data["active_db"]
+                if "databases" in data and isinstance(data["databases"], dict) and data["databases"]:
+                    APP_CONFIG["databases"] = data["databases"]
+                if "watcher_settings" in data and isinstance(data["watcher_settings"], dict):
+                    APP_CONFIG["watcher_settings"].update(data["watcher_settings"])
+            sync_active_db_vars()
         except Exception as e:
             print(f"[CONFIG] Error loading config: {e}")
+            sync_active_db_vars()
     else:
-        # Infer default folder from existing database if available
+        # Default initialization
+        sync_active_db_vars()
+        # If default sheets_index.db already exists in BASE_DIR, initialize from it
         try:
             if os.path.exists(DB_PATH):
                 conn = sqlite3.connect(DB_PATH)
@@ -71,12 +132,13 @@ def load_config():
                 cur.execute("SELECT folder FROM files LIMIT 1;")
                 row = cur.fetchone()
                 if row and row[0]:
-                    # Find common parent or top directory
                     fld = row[0]
                     while "/FINAL" in fld and not fld.endswith("/FINAL"):
                         fld = os.path.dirname(fld)
-                    WATCHER_CONFIG["folder"] = fld
-                    WATCHER_CONFIG["active"] = True
+                    APP_CONFIG["databases"]["default"]["watch_folder"] = fld
+                    APP_CONFIG["databases"]["default"]["watch_active"] = True
+                    APP_CONFIG["databases"]["default"]["nickname"] = os.path.basename(fld.rstrip('/')) or "Main Database"
+                    sync_active_db_vars()
                     save_config()
                 conn.close()
         except Exception:
@@ -84,11 +146,12 @@ def load_config():
 
 def save_config():
     try:
+        active_key = APP_CONFIG.get("active_db", "default")
+        if active_key in APP_CONFIG.get("databases", {}):
+            APP_CONFIG["databases"][active_key]["watch_folder"] = WATCHER_CONFIG.get("folder", "")
+            APP_CONFIG["databases"][active_key]["watch_active"] = WATCHER_CONFIG.get("active", False)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({
-                "watch_folder": WATCHER_CONFIG["folder"],
-                "watch_active": WATCHER_CONFIG["active"]
-            }, f, indent=2)
+            json.dump(APP_CONFIG, f, indent=2)
     except Exception as e:
         print(f"[CONFIG] Error saving config: {e}")
 
@@ -176,8 +239,18 @@ def normalize_arabic(text):
     return text.strip()
 
 def get_stats():
+    folder = WATCHER_CONFIG.get("folder", "")
+    active_key = APP_CONFIG.get("active_db", "default")
+    db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
+    nickname = db_meta.get("nickname", "Main Database")
+    storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
+
     if not os.path.exists(DB_PATH):
-        return {"files": 0, "records": 0, "watcher": WATCHER_CONFIG.get("active", False)}
+        return {
+            "files": 0, "records": 0, "watcher": WATCHER_CONFIG.get("active", False),
+            "folder": folder, "active_db": active_key, "db_nickname": nickname,
+            "db_path": DB_PATH, "db_storage_dir": storage_dir
+        }
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
@@ -185,10 +258,23 @@ def get_stats():
         total_files = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM cdr_records;")
         total_records = cur.fetchone()[0]
+        if not folder:
+            cur.execute("SELECT folder FROM files LIMIT 1;")
+            row = cur.fetchone()
+            if row and row[0]:
+                folder = row[0]
         conn.close()
-        return {"files": total_files, "records": total_records, "watcher": WATCHER_CONFIG.get("active", False)}
+        return {
+            "files": total_files, "records": total_records, "watcher": WATCHER_CONFIG.get("active", False),
+            "folder": folder, "active_db": active_key, "db_nickname": nickname,
+            "db_path": DB_PATH, "db_storage_dir": storage_dir
+        }
     except Exception:
-        return {"files": 0, "records": 0, "watcher": WATCHER_CONFIG.get("active", False)}
+        return {
+            "files": 0, "records": 0, "watcher": WATCHER_CONFIG.get("active", False),
+            "folder": folder, "active_db": active_key, "db_nickname": nickname,
+            "db_path": DB_PATH, "db_storage_dir": storage_dir
+        }
 
 def get_quick_filters():
     if not os.path.exists(DB_PATH):
@@ -398,6 +484,137 @@ def backup_database():
         snap_path = f"{DB_PATH}.snap_{date_str}"
         shutil.copy2(DB_PATH, snap_path)
         return True, f"Backup created: {os.path.basename(snap_path)}"
+    except Exception as e:
+        return False, str(e)
+
+def record_change_event(event_type, file_path, old_path=None, records_count=0, details=""):
+    """Log an index/file modification, addition, rename or removal in SQLite change_events."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS change_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            old_path TEXT,
+            filename TEXT,
+            records_count INTEGER DEFAULT 0,
+            details TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        fname = os.path.basename(file_path) if file_path else ""
+        cur.execute("""
+        INSERT INTO change_events (event_type, file_path, old_path, filename, records_count, details, is_read)
+        VALUES (?, ?, ?, ?, ?, ?, 0);
+        """, (event_type, file_path, old_path, fname, records_count, details))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[CHANGE EVENT LOG ERROR] {e}")
+        return False
+
+def get_change_events(limit=50, offset=0, unread_only=False):
+    """Retrieve indexed change notifications and unread badge count."""
+    if not os.path.exists(DB_PATH):
+        return {"events": [], "unread_count": 0, "total": 0}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS change_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            old_path TEXT,
+            filename TEXT,
+            records_count INTEGER DEFAULT 0,
+            details TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("SELECT COUNT(*) FROM change_events WHERE is_read = 0;")
+        unread_count = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM change_events;")
+        total_count = cur.fetchone()[0]
+
+        query = """
+        SELECT id, event_type, file_path, old_path, filename, records_count, details, is_read, created_at
+        FROM change_events
+        """
+        params = []
+        if unread_only:
+            query += " WHERE is_read = 0"
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?;"
+        params.extend([limit, offset])
+
+        cur.execute(query, params)
+        rows = []
+        for r in cur.fetchall():
+            rows.append({
+                "id": r[0],
+                "event_type": r[1],
+                "file_path": r[2],
+                "old_path": r[3],
+                "filename": r[4] or os.path.basename(r[2]),
+                "records_count": r[5] or 0,
+                "details": r[6] or "",
+                "is_read": bool(r[7]),
+                "created_at": r[8]
+            })
+        conn.close()
+        return {"events": rows, "unread_count": unread_count, "total": total_count}
+    except Exception as e:
+        print(f"[GET NOTIFICATIONS ERROR] {e}")
+        return {"events": [], "unread_count": 0, "total": 0}
+
+def mark_change_events_read(event_ids=None):
+    """Mark all or specific notification events as read."""
+    if not os.path.exists(DB_PATH):
+        return True, "No database"
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS change_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            old_path TEXT,
+            filename TEXT,
+            records_count INTEGER DEFAULT 0,
+            details TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        if event_ids:
+            placeholders = ",".join("?" for _ in event_ids)
+            cur.execute(f"UPDATE change_events SET is_read = 1 WHERE id IN ({placeholders});", event_ids)
+        else:
+            cur.execute("UPDATE change_events SET is_read = 1 WHERE is_read = 0;")
+        conn.commit()
+        conn.close()
+        return True, "Notifications marked as read"
+    except Exception as e:
+        return False, str(e)
+
+def clear_all_change_events():
+    """Clear notification history log."""
+    if not os.path.exists(DB_PATH):
+        return True, "No database"
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM change_events;")
+        conn.commit()
+        conn.close()
+        return True, "Notification history cleared"
     except Exception as e:
         return False, str(e)
 
@@ -943,6 +1160,66 @@ def query_db(query, limit=50, offset=0, scope_file=None, scope_folder=None, mode
             })
         return {"type": "general" if mode == "general" else "cdr", "rows": cdr_rows, "total": total_count, "limit": limit, "offset": offset, "mode": mode}
 
+    # 4. Short Query / Substring fallback on universal_search if no FTS or CDR matches were found
+    if mode == "general" and len(query) >= 1:
+        like_pat = f"%{query}%"
+        like_count_sql = f"""
+        SELECT COUNT(*)
+        FROM universal_search u
+        JOIN files f ON u.file_path = f.file_path
+        WHERE u.content LIKE ? {scope_clause_fts} {filetype_clause_fts};
+        """
+        try:
+            cur.execute(like_count_sql, [like_pat] + scope_params_fts + filetype_params_fts)
+            like_total = cur.fetchone()[0] or 0
+            if like_total > 0:
+                like_sql = f"""
+                SELECT u.file_path, u.sheet_name, u.row_idx, u.content,
+                       f.folder, f.indexed_at,
+                       c.event_time, c.direction, c.target_msisdn, c.other_msisdn, c.other_name, c.duration, c.cell_address
+                FROM universal_search u
+                JOIN files f ON u.file_path = f.file_path
+                LEFT JOIN cdr_records c ON c.file_id = f.file_id AND c.sheet_name = u.sheet_name AND c.row_idx = u.row_idx
+                WHERE u.content LIKE ? {scope_clause_fts} {filetype_clause_fts}
+                LIMIT ? OFFSET ?;
+                """
+                cur.execute(like_sql, [like_pat] + scope_params_fts + filetype_params_fts + [limit, offset])
+                raw_rows = cur.fetchall()
+                conn.close()
+
+                results = []
+                for r in raw_rows:
+                    fpath = r[0]
+                    content_str = r[3] or ""
+                    fname = os.path.basename(fpath)
+                    fsize = None
+                    try:
+                        if os.path.exists(fpath):
+                            fsize = os.path.getsize(fpath)
+                    except Exception:
+                        pass
+                    results.append({
+                        "file": fname,
+                        "folder": r[4] or os.path.dirname(fpath),
+                        "path": fpath,
+                        "sheet": r[1],
+                        "row": r[2],
+                        "content": content_str,
+                        "snippet": content_str[:500] if content_str else "—",
+                        "size": fsize,
+                        "indexed_at": r[5] or "—",
+                        "time": r[6] or "—",
+                        "dir": r[7] or "—",
+                        "target": r[8] or "—",
+                        "other": r[9] or "—",
+                        "name": r[10] or "—",
+                        "duration": r[11] or "—",
+                        "address": r[12] or "—"
+                    })
+                return {"type": "general", "rows": results, "total": like_total, "limit": limit, "offset": offset, "mode": mode}
+        except Exception:
+            pass
+
     conn.close()
     return {"type": "general" if mode == "general" else "cdr", "rows": [], "total": 0, "limit": limit, "offset": offset, "mode": mode}
 
@@ -990,8 +1267,14 @@ SUPPORTED_EXTENSIONS = (
     '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'
 )
 
-def start_indexing_thread(folder_path):
-    """Run folder scan & parallel index with live progress tracking & auto-backup."""
+def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False, nickname=None, db_key=None):
+    """
+    Run folder scan & index with live progress tracking & auto-backup.
+    - force_reindex=True: clears existing index (files, cdr, universal_search, ocr) and indexes everything from scratch.
+    - force_refresh=True: rechecks all files against database mtime/size, updates modified/added files, removes missing files without full re-index.
+    - nickname: Optional human-readable nickname for this database.
+    - db_key: Optional existing or new database profile key.
+    """
     global INDEX_STATE
     if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
         return False, f"Folder does not exist: {folder_path}"
@@ -1005,14 +1288,50 @@ def start_indexing_thread(folder_path):
         INDEX_STATE["total"] = 0
         INDEX_STATE["percent"] = 0
         INDEX_STATE["records_indexed"] = 0
-        INDEX_STATE["current_file"] = "Creating safety backup & scanning folder..."
-        INDEX_STATE["status_message"] = "Scanning folder..."
+        if force_reindex:
+            INDEX_STATE["current_file"] = "Creating safety backup & wiping index for full rebuild..."
+            INDEX_STATE["status_message"] = "Preparing complete re-index..."
+        elif force_refresh:
+            INDEX_STATE["current_file"] = "Scanning for added, modified or moved documents..."
+            INDEX_STATE["status_message"] = "Checking for file changes..."
+        else:
+            INDEX_STATE["current_file"] = "Creating safety backup & scanning folder..."
+            INDEX_STATE["status_message"] = "Scanning folder..."
 
     def _worker():
-        global INDEX_STATE
+        global INDEX_STATE, DB_PATH
         try:
-            # 1. Automatic safety snapshot before starting major index
-            backup_database()
+            # 1. Automatic safety snapshot before starting index if database exists
+            if os.path.exists(DB_PATH):
+                backup_database()
+
+            conn = sqlite3.connect(DB_PATH)
+            indexer_engine.init_db(conn)
+
+            # If force_reindex: reset index tables (preserve bookmarks and quick_filters)
+            if force_reindex:
+                print(f"[RE-INDEX] Wiping current index data for fresh re-index of {folder_path}...")
+                conn.execute("DELETE FROM cdr_records;")
+                conn.execute("DELETE FROM universal_search;")
+                conn.execute("DELETE FROM ocr_boxes;")
+                conn.execute("DELETE FROM files;")
+                conn.commit()
+                record_change_event(
+                    event_type="reindex_started",
+                    file_path=folder_path,
+                    details="Full index rebuild initiated"
+                )
+
+            # Collect existing files in DB
+            db_files = {}
+            if not force_reindex:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT file_path, filename FROM files;")
+                    for fp, fn in cur.fetchall():
+                        db_files[fp] = fn
+                except Exception:
+                    pass
 
             files_to_scan = []
             for root, dirs, files in os.walk(folder_path):
@@ -1026,37 +1345,126 @@ def start_indexing_thread(folder_path):
                 INDEX_STATE["percent"] = 100
                 INDEX_STATE["status_message"] = "No supported document, sheet, or image files found in folder"
                 INDEX_STATE["running"] = False
+                conn.close()
                 return
 
-            conn = sqlite3.connect(DB_PATH)
-            try:
-                indexer_engine.init_db(conn)
-                total_records = 0
+            # In force_refresh mode: determine which files actually need indexing or were deleted/moved
+            files_to_process = files_to_scan
+            removed_count = 0
+            if force_refresh and not force_reindex:
+                current_set = set(files_to_scan)
+                # Check for removed or renamed files in DB
+                for old_fp in list(db_files.keys()):
+                    if old_fp.startswith(folder_path) and old_fp not in current_set:
+                        old_name = db_files[old_fp]
+                        matched_rename = None
+                        for cur_fp in files_to_scan:
+                            if cur_fp not in db_files and os.path.basename(cur_fp) == old_name:
+                                matched_rename = cur_fp
+                                break
 
-                completed = 0
-                for fpath in files_to_scan:
-                    fname = os.path.basename(fpath)
-                    completed += 1
-                    INDEX_STATE["current"] = completed
-                    INDEX_STATE["current_file"] = fname
-                    INDEX_STATE["percent"] = int((completed / len(files_to_scan)) * 100)
-                    INDEX_STATE["status_message"] = f"Indexing {completed}/{len(files_to_scan)}: {fname}"
+                        cur = conn.cursor()
+                        cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (old_fp,))
+                        row = cur.fetchone()
+                        if row:
+                            fid = row[0]
+                            cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (fid,))
+                            cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (old_fp,))
+                            cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (old_fp,))
+                            cur.execute("DELETE FROM files WHERE file_id = ?;", (fid,))
+                            conn.commit()
 
-                    try:
-                        cnt = indexer_engine.process_file(fpath, conn)
-                        total_records += cnt
-                        INDEX_STATE["records_indexed"] = total_records
-                    except Exception as ex:
-                        print(f"[INDEX ERROR] {fname}: {ex}")
-            finally:
-                conn.close()
+                        if matched_rename:
+                            record_change_event(
+                                event_type="renamed",
+                                file_path=matched_rename,
+                                old_path=old_fp,
+                                details=f"Moved/renamed from {os.path.basename(old_fp)} to {os.path.basename(matched_rename)}"
+                            )
+                        else:
+                            record_change_event(
+                                event_type="deleted",
+                                file_path=old_fp,
+                                details=f"File deleted or moved out of watch directory"
+                            )
+                        removed_count += 1
+
+                # Filter files_to_process: only newly added or modified since indexed_at
+                cur = conn.cursor()
+                cur.execute("SELECT file_path, indexed_at FROM files;")
+                db_indexed = {r[0]: r[1] for r in cur.fetchall()}
+
+                needed = []
+                for fp in files_to_scan:
+                    if fp not in db_indexed:
+                        needed.append(fp)
+                    else:
+                        try:
+                            mtime = os.path.getmtime(fp)
+                            idx_str = db_indexed[fp]
+                            idx_time = time.mktime(time.strptime(idx_str, "%Y-%m-%d %H:%M:%S")) if idx_str else 0
+                            if mtime > idx_time:
+                                needed.append(fp)
+                        except Exception:
+                            needed.append(fp)
+                files_to_process = needed
+                INDEX_STATE["total"] = len(files_to_process)
+                if not files_to_process:
+                    INDEX_STATE["percent"] = 100
+                    INDEX_STATE["status_message"] = f"Index is up to date! ({len(files_to_scan)} documents checked, {removed_count} pruned)"
+                    INDEX_STATE["running"] = False
+                    conn.close()
+                    return
+
+            total_records = 0
+            completed = 0
+            for fpath in files_to_process:
+                fname = os.path.basename(fpath)
+                completed += 1
+                INDEX_STATE["current"] = completed
+                INDEX_STATE["current_file"] = fname
+                INDEX_STATE["percent"] = int((completed / len(files_to_process)) * 100)
+                INDEX_STATE["status_message"] = f"Indexing {completed}/{len(files_to_process)}: {fname}"
+
+                is_new = (fpath not in db_files)
+                try:
+                    cnt = indexer_engine.process_file(fpath, conn)
+                    total_records += cnt
+                    INDEX_STATE["records_indexed"] = total_records
+
+                    # If force_refresh or single refresh, record change notification
+                    if force_refresh:
+                        record_change_event(
+                            event_type="added" if is_new else "modified",
+                            file_path=fpath,
+                            records_count=cnt,
+                            details=f"{'Added new file' if is_new else 'Updated modified file'} with {cnt:,} records"
+                        )
+                except Exception as ex:
+                    print(f"[INDEX ERROR] {fname}: {ex}")
+
+            if force_reindex:
+                record_change_event(
+                    event_type="reindex_completed",
+                    file_path=folder_path,
+                    records_count=total_records,
+                    details=f"Full re-index complete: {len(files_to_process)} files ({total_records:,} records)"
+                )
+
+            conn.close()
 
             INDEX_STATE["percent"] = 100
-            INDEX_STATE["status_message"] = f"Completed! Indexed {len(files_to_scan)} documents ({total_records:,} searchable entries)"
+            INDEX_STATE["status_message"] = f"Completed! Processed {len(files_to_process)} documents ({total_records:,} searchable entries)"
             
-            # Automatically update watch folder
+            # Automatically update watch folder & database registry
             WATCHER_CONFIG["folder"] = folder_path
             WATCHER_CONFIG["active"] = True
+            active_key = APP_CONFIG.get("active_db", "default")
+            if active_key in APP_CONFIG.get("databases", {}):
+                APP_CONFIG["databases"][active_key]["watch_folder"] = folder_path
+                APP_CONFIG["databases"][active_key]["watch_active"] = True
+                if nickname:
+                    APP_CONFIG["databases"][active_key]["nickname"] = nickname
             save_config()
         except Exception as e:
             INDEX_STATE["status_message"] = f"Error during indexing: {e}"
@@ -1071,26 +1479,37 @@ def start_indexing_thread(folder_path):
 def folder_watcher_loop():
     known_files = {} # {path: (mtime, size)}
     
-    # Initialize cache from database
     while True:
         try:
             folder = WATCHER_CONFIG.get("folder")
             active = WATCHER_CONFIG.get("active", False)
+            w_settings = APP_CONFIG.get("watcher_settings", {})
+            poll_interval = max(1, int(w_settings.get("poll_interval_seconds", 3)))
+            debounce_sec = max(0.5, float(w_settings.get("debounce_delay_seconds", 2.0)))
+            max_size_mb = float(w_settings.get("max_file_size_mb", 250))
+            ignore_hidden_temp = bool(w_settings.get("ignore_hidden_temp", True))
+            max_bytes = max_size_mb * 1024 * 1024 if max_size_mb > 0 else float('inf')
             
             if active and folder and os.path.exists(folder) and os.path.isdir(folder) and not INDEX_STATE["running"]:
                 current_files = {}
                 for root, dirs, files in os.walk(folder):
+                    # Prune hidden directories
+                    if ignore_hidden_temp:
+                        dirs[:] = [d for d in dirs if not d.startswith('.')]
                     for f in files:
+                        if ignore_hidden_temp and (f.startswith('~$') or f.startswith('.')):
+                            continue
                         ext = os.path.splitext(f)[1].lower()
-                        if ext in SUPPORTED_EXTENSIONS and not f.startswith('~$') and not f.startswith('.'):
+                        if ext in SUPPORTED_EXTENSIONS:
                             full_p = os.path.join(root, f)
                             try:
                                 stat = os.stat(full_p)
-                                current_files[full_p] = (stat.st_mtime, stat.st_size)
+                                if stat.st_size <= max_bytes:
+                                    current_files[full_p] = (stat.st_mtime, stat.st_size)
                             except Exception:
                                 pass
 
-                # If first run, check which files are not in DB
+                # If first run on this database, check which files are in DB
                 if not known_files and os.path.exists(DB_PATH):
                     try:
                         conn = sqlite3.connect(DB_PATH)
@@ -1109,3470 +1528,107 @@ def folder_watcher_loop():
                     if p not in known_files or known_files[p] != st:
                         changed_files.append(p)
 
-                if changed_files and not INDEX_STATE["running"]:
-                    print(f"[WATCHER] Detected {len(changed_files)} new/modified files in {folder}")
-                    conn = sqlite3.connect(DB_PATH)
-                    indexer_engine.init_db(conn)
-                    for cf in changed_files:
-                        print(f"[WATCHER] Auto-indexing: {os.path.basename(cf)}")
-                        try:
-                            # Wait brief moment in case file is still copying
-                            time.sleep(0.5)
-                            cnt = indexer_engine.process_file(cf, conn)
-                            print(f"[WATCHER] Indexed {cnt} records from {os.path.basename(cf)}")
-                        except Exception as e:
-                            print(f"[WATCHER ERROR] Failed to index {cf}: {e}")
-                        # Update cache
-                        try:
-                            st = os.stat(cf)
-                            known_files[cf] = (st.st_mtime, st.st_size)
-                        except Exception:
-                            known_files[cf] = current_files.get(cf)
-                    conn.close()
-
-                # Clean up deleted files from known_files
+                # Detect deleted or moved files
+                missing_files = []
                 for p in list(known_files.keys()):
                     if p not in current_files:
-                        del known_files[p]
+                        missing_files.append(p)
+
+                # Process missing (deleted / renamed) files
+                if missing_files and not INDEX_STATE["running"]:
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        indexer_engine.init_db(conn)
+                        for mp in missing_files:
+                            old_name = os.path.basename(mp)
+                            renamed_to = None
+                            for cf in changed_files:
+                                if os.path.basename(cf) == old_name:
+                                    renamed_to = cf
+                                    break
+
+                            # Clean old path from database
+                            cur = conn.cursor()
+                            cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (mp,))
+                            row = cur.fetchone()
+                            if row:
+                                fid = row[0]
+                                cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (fid,))
+                                cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (mp,))
+                                cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (mp,))
+                                cur.execute("DELETE FROM files WHERE file_id = ?;", (fid,))
+                                conn.commit()
+
+                            del known_files[mp]
+
+                            if renamed_to:
+                                record_change_event(
+                                    event_type="renamed",
+                                    file_path=renamed_to,
+                                    old_path=mp,
+                                    details=f"File moved or renamed from {os.path.basename(mp)} to {os.path.basename(renamed_to)}"
+                                )
+                                print(f"[WATCHER] Detected file rename: {mp} -> {renamed_to}")
+                            else:
+                                record_change_event(
+                                    event_type="deleted",
+                                    file_path=mp,
+                                    details="File was removed or deleted from watched directory"
+                                )
+                                print(f"[WATCHER] Detected file removal: {mp}")
+                        conn.close()
+                    except Exception as e:
+                        print(f"[WATCHER ERROR] Failed to clean removed files: {e}")
+
+                # Process newly added or modified files
+                if changed_files and not INDEX_STATE["running"]:
+                    # Debounce check: ensure files have settled (size & mtime steady for debounce_sec)
+                    time.sleep(debounce_sec)
+                    ready_files = []
+                    for cf in changed_files:
+                        try:
+                            st_now = os.stat(cf)
+                            if (st_now.st_mtime, st_now.st_size) == current_files.get(cf):
+                                ready_files.append(cf)
+                        except Exception:
+                            pass
+
+                    if ready_files:
+                        print(f"[WATCHER] Processing {len(ready_files)} settled file(s) in {folder}")
+                        conn = sqlite3.connect(DB_PATH)
+                        indexer_engine.init_db(conn)
+                        for cf in ready_files:
+                            is_new_file = cf not in known_files
+                            print(f"[WATCHER] Auto-indexing: {os.path.basename(cf)}")
+                            cnt = 0
+                            try:
+                                cnt = indexer_engine.process_file(cf, conn)
+                                print(f"[WATCHER] Indexed {cnt} records from {os.path.basename(cf)}")
+                                
+                                record_change_event(
+                                    event_type="added" if is_new_file else "modified",
+                                    file_path=cf,
+                                    records_count=cnt,
+                                    details=f"{'Added new file' if is_new_file else 'Updated modified file'} with {cnt:,} searchable entries"
+                                )
+                            except Exception as e:
+                                print(f"[WATCHER ERROR] Failed to index {cf}: {e}")
+                            
+                            try:
+                                st = os.stat(cf)
+                                known_files[cf] = (st.st_mtime, st.st_size)
+                            except Exception:
+                                known_files[cf] = current_files.get(cf)
+                        conn.close()
         except Exception as e:
             print(f"[WATCHER ERROR] Loop error: {e}")
             
-        time.sleep(3)
-
-HTML_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OmniSearch | Universal Document & Intelligence Engine</title>
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg-primary: #080d1a;
-    --bg-secondary: #0f172a;
-    --bg-card: #111a2e;
-    --bg-card-hover: #16223b;
-    --border: #1e293b;
-    --border-subtle: #1e293b80;
-    --border-hover: #334155;
-    --accent: #38bdf8;
-    --accent-hover: #0ea5e9;
-    --text-main: #f8fafc;
-    --text-muted: #94a3b8;
-    --text-dim: #64748b;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background-color: var(--bg-primary);
-    color: var(--text-main);
-    padding: 24px 32px;
-    min-height: 100vh;
-    max-width: 1440px;
-    margin: 0 auto;
-  }
-  .arabic { font-family: 'Cairo', sans-serif; }
-
-  /* SVG Icons */
-  .icon-svg {
-    width: 17px;
-    height: 17px;
-    display: inline-block;
-    vertical-align: middle;
-    flex-shrink: 0;
-  }
-  .icon-sm { width: 14px; height: 14px; }
-  .icon-lg { width: 20px; height: 20px; }
-  .icon-cyan { color: #38bdf8; }
-  .icon-rose { color: #f43f5e; }
-  .icon-emerald { color: #10b981; }
-  .icon-amber { color: #f59e0b; }
-  .icon-purple { color: #a855f7; }
-  .icon-blue { color: #3b82f6; }
-  .icon-indigo { color: #818cf8; }
-  .icon-pink { color: #ec4899; }
-  .icon-teal { color: #14b8a6; }
-  .icon-slate { color: #94a3b8; }
-  .icon-white { color: #ffffff; }
-
-  /* Clean Minimalist Header */
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 18px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-wrap: wrap;
-    gap: 14px;
-  }
-  .header-brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .header-brand h1 {
-    font-size: 1.35rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: #f8fafc;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .header-brand span.subtitle {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    font-weight: 400;
-    margin-left: 4px;
-  }
-  .header-actions {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  /* Watcher Status Switch Pill */
-  .watcher-switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: #090e1a;
-    border: 1px solid var(--border);
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 0.82rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    user-select: none;
-  }
-  .watcher-switch:hover {
-    border-color: var(--border-hover);
-  }
-  .watcher-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-    transition: all 0.2s;
-  }
-  .watcher-dot.active {
-    background: #10b981;
-    box-shadow: 0 0 8px #10b981;
-  }
-  .watcher-dot.paused {
-    background: #f43f5e;
-    box-shadow: 0 0 6px rgba(244, 63, 94, 0.6);
-  }
-
-  .stats-pill {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    background: #090e1a;
-    border: 1px solid var(--border-subtle);
-    padding: 6px 12px;
-    border-radius: 8px;
-  }
-
-  .btn-header {
-    background: #090e1a;
-    border: 1px solid var(--border);
-    color: #cbd5e1;
-    padding: 6px 14px;
-    border-radius: 8px;
-    font-size: 0.82rem;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s;
-  }
-  .btn-header:hover {
-    background: #1e293b;
-    border-color: var(--accent);
-    color: #fff;
-  }
-  .btn-header.primary {
-    background: linear-gradient(135deg, #0284c7, #0369a1);
-    border-color: #38bdf860;
-    color: #fff;
-    font-weight: 600;
-  }
-  .btn-header.primary:hover {
-    background: linear-gradient(135deg, #0ea5e9, #0284c7);
-  }
-
-  /* Tools Dropdown Menu */
-  .dropdown {
-    position: relative;
-    display: inline-block;
-  }
-  .dropdown-content {
-    display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 6px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    min-width: 170px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.6);
-    z-index: 1000;
-    padding: 6px;
-  }
-  .dropdown.open .dropdown-content { display: block; }
-  .dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 0.82rem;
-    color: #cbd5e1;
-    cursor: pointer;
-    background: transparent;
-    border: none;
-    width: 100%;
-    text-align: left;
-    transition: background 0.15s;
-  }
-  .dropdown-item:hover {
-    background: #1e293b;
-    color: #fff;
-  }
-
-  /* Navigation Tabs */
-  .nav-tabs {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid var(--border-subtle);
-    padding-bottom: 0px;
-  }
-  .nav-tab-btn {
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-muted);
-    padding: 10px 18px;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.2s;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-  }
-  .nav-tab-btn:hover {
-    color: #f8fafc;
-  }
-  .nav-tab-btn.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-    font-weight: 600;
-  }
-  .nav-tab-badge {
-    background: rgba(56, 189, 248, 0.12);
-    color: #38bdf8;
-    border-radius: 9999px;
-    font-size: 0.7rem;
-    padding: 1px 7px;
-    font-weight: 600;
-  }
-
-  /* Hero Search Container */
-  .search-container {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 22px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
-  }
-  .search-bar-row {
-    display: flex;
-    gap: 10px;
-    position: relative;
-    align-items: center;
-  }
-  .search-icon-inside {
-    position: absolute;
-    left: 14px;
-    pointer-events: none;
-  }
-  input[type="text"] {
-    flex: 1;
-    background: #090e1a;
-    border: 1px solid var(--border);
-    color: #fff;
-    padding: 12px 42px 12px 42px;
-    border-radius: 8px;
-    font-size: 0.98rem;
-    outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  input[type="text"]:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
-  }
-  .clear-btn {
-    position: absolute;
-    right: 120px;
-    background: none;
-    border: none;
-    color: #64748b;
-    cursor: pointer;
-    display: none;
-    padding: 4px;
-  }
-  .clear-btn:hover { color: #f43f5e; }
-  .btn-search {
-    background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-    color: #0b1120;
-    border: none;
-    padding: 11px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.92rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s;
-  }
-  .btn-search:hover {
-    box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
-    transform: translateY(-1px);
-  }
-
-  /* Search Mode Switcher */
-  .search-mode-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .search-mode-pills {
-    display: flex;
-    gap: 4px;
-    background: #090e1a;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 3px;
-  }
-  .mode-pill {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s ease;
-  }
-  .mode-pill:hover {
-    color: #f8fafc;
-  }
-  .mode-pill.active {
-    background: var(--accent);
-    color: #080d1a;
-    box-shadow: 0 2px 8px rgba(56, 189, 248, 0.35);
-  }
-  .mode-pill.telecom-mode.active {
-    background: linear-gradient(135deg, #10b981, #059669);
-    color: #fff;
-    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
-  }
-  .mode-desc-text {
-    font-size: 0.78rem;
-    color: var(--text-dim);
-  }
-
-  /* Segmented Category Filter Tabs */
-  .filter-tabs-row {
-    display: flex;
-    gap: 6px;
-    margin-top: 12px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .filter-pill {
-    background: transparent;
-    border: 1px solid transparent;
-    color: var(--text-muted);
-    padding: 5px 12px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s ease;
-  }
-  .filter-pill:hover {
-    color: #f8fafc;
-    background: #1e293b40;
-  }
-  .filter-pill.active {
-    background: rgba(56, 189, 248, 0.12);
-    border-color: rgba(56, 189, 248, 0.4);
-    color: #38bdf8;
-    font-weight: 600;
-  }
-
-  /* Custom Shortcuts Bar */
-  .quick-chips {
-    display: flex;
-    gap: 6px;
-    margin-top: 10px;
-    align-items: center;
-    font-size: 0.78rem;
-    color: var(--text-dim);
-    flex-wrap: wrap;
-    border-top: 1px solid #1e293b40;
-    padding-top: 10px;
-  }
-  .chip {
-    background: #090e1a;
-    border: 1px solid var(--border-subtle);
-    padding: 3px 8px;
-    border-radius: 5px;
-    cursor: pointer;
-    color: #cbd5e1;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.78rem;
-    transition: all 0.15s;
-  }
-  .chip:hover {
-    border-color: var(--accent);
-    color: #fff;
-  }
-  .btn-add-chip {
-    background: transparent;
-    border: 1px dashed var(--border);
-    color: var(--text-dim);
-    padding: 3px 8px;
-    border-radius: 5px;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .btn-add-chip:hover {
-    border-color: var(--accent);
-    color: #fff;
-  }
-
-  /* Status Bar */
-  .status-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 14px;
-    font-size: 0.84rem;
-    color: var(--text-muted);
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .view-toggle {
-    display: flex;
-    background: #090e1a;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-  .view-btn {
-    background: none;
-    border: none;
-    color: #94a3b8;
-    padding: 5px 12px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    transition: all 0.15s;
-  }
-  .view-btn.active {
-    background: var(--accent);
-    color: #090e1a;
-    font-weight: 600;
-  }
-
-  /* Cards Results */
-  .cards-container {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .result-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px 20px;
-    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-  }
-  .result-card:hover {
-    background: var(--bg-card-hover);
-    border-color: rgba(56, 189, 248, 0.4);
-    transform: translateY(-1px);
-  }
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-  }
-  .file-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.94rem;
-    font-weight: 600;
-    color: #f8fafc;
-    word-break: break-all;
-  }
-  .file-type-pill {
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    text-transform: uppercase;
-  }
-  .pill-pdf { background: #dc262615; border: 1px solid #dc262650; color: #f87171; }
-  .pill-xlsx, .pill-xls, .pill-csv { background: #05966915; border: 1px solid #05966950; color: #34d399; }
-  .pill-docx, .pill-doc, .pill-odt { background: #2563eb15; border: 1px solid #2563eb50; color: #60a5fa; }
-  .pill-image { background: #a855f715; border: 1px solid #a855f750; color: #c084fc; }
-  .pill-txt { background: #14b8a615; border: 1px solid #14b8a650; color: #2dd4bf; }
-
-  .card-actions {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .btn-action {
-    background: #090e1a;
-    border: 1px solid var(--border);
-    color: #cbd5e1;
-    padding: 5px 10px;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    transition: all 0.15s;
-  }
-  .btn-action:hover {
-    border-color: var(--accent);
-    color: #fff;
-    background: #1e293b;
-  }
-  .btn-image-preview {
-    background: rgba(168, 85, 247, 0.15);
-    border: 1px solid #a855f770;
-    color: #d8b4fe;
-    padding: 5px 11px;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    transition: all 0.2s;
-  }
-  .btn-image-preview:hover {
-    background: #a855f7;
-    color: #fff;
-  }
-
-  .card-pill-group {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
-  }
-  .info-pill {
-    background: #090e1a;
-    border: 1px solid var(--border-subtle);
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: #cbd5e1;
-    cursor: pointer;
-    user-select: none;
-    transition: all 0.15s;
-  }
-  .info-pill:hover {
-    border-color: var(--accent);
-    color: #fff;
-  }
-  .general-card-meta {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    align-items: center;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    margin-bottom: 10px;
-  }
-  .meta-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-  }
-
-  .snippet-box {
-    background: #080d1a;
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    padding: 12px 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
-    line-height: 1.6;
-    color: #cbd5e1;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .snippet-box mark, .match-hl {
-    background: rgba(56, 189, 248, 0.28);
-    border-bottom: 2px solid var(--accent);
-    color: #fff;
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-weight: 600;
-  }
-
-  /* Table Grid */
-  .table-container {
-    overflow-x: auto;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
-    margin-bottom: 20px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.83rem;
-    text-align: left;
-  }
-  th {
-    background: #090e1a;
-    padding: 10px 12px;
-    font-weight: 600;
-    color: var(--accent);
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-  }
-  td {
-    padding: 9px 12px;
-    border-bottom: 1px solid #1e293b50;
-    color: #e2e8f0;
-    vertical-align: middle;
-  }
-  tr:hover td { background: #1e293b40; }
-
-  /* Custom Dark Scrollbar */
-  ::-webkit-scrollbar {
-    width: 9px;
-    height: 9px;
-  }
-  ::-webkit-scrollbar-track {
-    background: #080d1a;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #1e293b;
-    border-radius: 6px;
-    border: 2px solid #080d1a;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #334155;
-  }
-
-  /* Pagination Bar (Top & Bottom) */
-  .pagination-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 16px;
-    margin-bottom: 16px;
-    font-size: 0.82rem;
-    color: var(--text-muted);
-  }
-  .pagination-bar.top-bar {
-    margin-top: 8px;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .pagination-btns {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .page-btn {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    color: #cbd5e1;
-    padding: 5px 12px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .page-btn:hover:not(:disabled) {
-    background: #1e293b;
-    border-color: var(--accent);
-    color: #fff;
-  }
-  .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-
-  /* Floating Scroll Navigation Buttons */
-  .scroll-nav-container {
-    position: fixed;
-    right: 24px;
-    bottom: 28px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    z-index: 999;
-  }
-  .scroll-nav-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    color: #cbd5e1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    transition: all 0.2s ease;
-    user-select: none;
-  }
-  .scroll-nav-btn:hover {
-    background: #1e293b;
-    border-color: var(--accent);
-    color: var(--accent);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.25);
-  }
-
-  /* Scoped Folder Picker Tab */
-  .scoped-config-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 20px;
-  }
-  .scoped-methods {
-    display: grid;
-    grid-template-columns: 1.1fr 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
-  }
-  @media (max-width: 860px) {
-    .scoped-methods { grid-template-columns: 1fr; }
-  }
-  .scoped-box {
-    background: #090e1a;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-  }
-  .scoped-box h4 {
-    font-size: 0.94rem;
-    color: #f8fafc;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .scoped-box p {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    margin-bottom: 12px;
-    line-height: 1.4;
-  }
-  .folder-picker-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: auto;
-  }
-  .btn-folder-pick {
-    background: linear-gradient(135deg, #d97706, #b45309);
-    color: #fff;
-    border: 1px solid #f59e0b80;
-    padding: 9px 16px;
-    border-radius: 7px;
-    font-weight: 600;
-    font-size: 0.84rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    transition: all 0.2s;
-  }
-  .btn-folder-pick:hover {
-    background: linear-gradient(135deg, #f59e0b, #d97706);
-    transform: translateY(-1px);
-  }
-  .btn-file-pick {
-    background: #1e293b;
-    color: #cbd5e1;
-    border: 1px solid var(--border);
-    padding: 9px 12px;
-    border-radius: 7px;
-    font-weight: 500;
-    font-size: 0.82rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.2s;
-  }
-  .btn-file-pick:hover {
-    background: #334155;
-    color: #fff;
-  }
-  .btn-folder-subtle {
-    background: transparent;
-    color: var(--text-dim);
-    border: 1px dashed var(--border);
-    padding: 9px 10px;
-    border-radius: 7px;
-    font-size: 0.78rem;
-    cursor: pointer;
-  }
-  .btn-folder-subtle:hover { color: #fff; border-color: var(--accent); }
-
-  .drop-zone {
-    border: 2px dashed #38bdf850;
-    border-radius: 8px;
-    padding: 20px 14px;
-    text-align: center;
-    cursor: pointer;
-    background: #090e1a80;
-    transition: all 0.2s;
-  }
-  .drop-zone:hover, .drop-zone.dragover {
-    border-color: var(--accent);
-    background: rgba(56, 189, 248, 0.08);
-  }
-  .drop-zone p { margin-bottom: 0; color: #cbd5e1; font-size: 0.82rem; }
-
-  .active-scope-banner {
-    background: rgba(56, 189, 248, 0.08);
-    border: 1px solid #0284c760;
-    border-radius: 8px;
-    padding: 10px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.84rem;
-    color: #f8fafc;
-    margin-bottom: 16px;
-  }
-  .scope-name-tag {
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--accent);
-    font-weight: 600;
-    word-break: break-all;
-  }
-  .btn-clear-scope {
-    background: #ef444420;
-    border: 1px solid #ef444450;
-    color: #f87171;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 0.76rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .btn-clear-scope:hover { background: #ef4444; color: #fff; }
-
-  /* Live Progress Banner */
-  .progress-banner {
-    display: none;
-    background: var(--bg-secondary);
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 12px 16px;
-    margin-bottom: 18px;
-  }
-  .progress-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.84rem;
-    margin-bottom: 6px;
-  }
-  .progress-bar-bg {
-    width: 100%;
-    height: 8px;
-    background: #090e1a;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .progress-bar-fill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, #38bdf8, #10b981);
-    transition: width 0.3s ease;
-  }
-
-  /* Modals */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.8);
-    z-index: 10000;
-    align-items: center;
-    justify-content: center;
-    backdrop-filter: blur(8px);
-  }
-  .modal-overlay.active { display: flex; }
-  .modal-content {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    padding: 22px;
-    border-radius: 12px;
-    width: 92%;
-    max-width: 540px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.7);
-  }
-  .modal-content h3 {
-    margin-bottom: 10px;
-    color: var(--accent);
-    font-size: 1.15rem;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .modal-content p {
-    font-size: 0.84rem;
-    color: var(--text-muted);
-    margin-bottom: 14px;
-    line-height: 1.45;
-  }
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 18px;
-  }
-
-  /* Image & Selectable OCR Split Inspector Modal */
-  .image-modal-wide {
-    max-width: 1280px;
-    width: 96%;
-    height: 90vh;
-    max-height: 92vh;
-    display: flex;
-    flex-direction: column;
-    padding: 18px 22px;
-  }
-  .image-modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .image-modal-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .image-modal-controls {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .image-ocr-notice {
-    font-size: 0.82rem;
-    color: #38bdf8;
-    background: rgba(56, 189, 248, 0.1);
-    border: 1px solid rgba(56, 189, 248, 0.25);
-    padding: 6px 12px;
-    border-radius: 6px;
-    margin-top: 10px;
-  }
-  .image-inspector-split {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 1.3fr 1fr;
-    gap: 16px;
-    min-height: 0;
-    overflow: hidden;
-    margin-top: 10px;
-  }
-  @media (max-width: 920px) {
-    .image-inspector-split {
-      grid-template-columns: 1fr;
-      grid-template-rows: 1.2fr 1fr;
-    }
-  }
-  .image-scroll-wrapper {
-    flex: 1;
-    overflow: auto;
-    background: #050811;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    text-align: center;
-    position: relative;
-    min-height: 0;
-  }
-  .ocr-preview-container {
-    position: relative;
-    display: inline-block;
-    max-width: 100%;
-    margin: 0 auto;
-  }
-
-  /* OCR Word Highlight Boxes on Image */
-  .ocr-highlight-box {
-    position: absolute;
-    box-sizing: border-box;
-    border: 1.5px solid rgba(168, 85, 247, 0.45);
-    background: rgba(168, 85, 247, 0.12);
-    pointer-events: auto;
-    border-radius: 2px;
-    transition: all 0.15s ease;
-    cursor: text;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    overflow: hidden;
-  }
-  .ocr-highlight-box:hover {
-    background: rgba(168, 85, 247, 0.4);
-    border-color: #a855f7;
-    box-shadow: 0 0 8px rgba(168, 85, 247, 0.8);
-    z-index: 25;
-  }
-  .ocr-highlight-box.active-match {
-    border: 2.5px solid #38bdf8 !important;
-    background: rgba(56, 189, 248, 0.4) !important;
-    box-shadow: 0 0 14px rgba(56, 189, 248, 0.95) !important;
-    z-index: 50;
-    animation: matchPulse 1.5s infinite alternate;
-  }
-  @keyframes matchPulse {
-    0% { transform: scale(1); box-shadow: 0 0 8px rgba(56, 189, 248, 0.7); }
-    100% { transform: scale(1.05); box-shadow: 0 0 16px rgba(56, 189, 248, 1); }
-  }
-
-  /* Transparent Live Text Layer for Direct Mouse Dragging Selection */
-  .ocr-live-text {
-    font-size: 11px;
-    line-height: 1;
-    color: transparent;
-    user-select: text;
-    -webkit-user-select: text;
-    width: 100%;
-    height: 100%;
-    display: block;
-    overflow: hidden;
-    pointer-events: auto;
-    cursor: text;
-  }
-  ::selection {
-    background: rgba(56, 189, 248, 0.45);
-    color: #fff;
-  }
-
-  /* OCR Extracted Text Inspector Sidebar */
-  .ocr-text-inspector {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background: #090e1a;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .ocr-inspector-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border-subtle);
-    background: #0d1424;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .ocr-panel-pill {
-    font-size: 0.74rem;
-    font-weight: 700;
-    background: #0284c725;
-    border: 1px solid #0284c760;
-    color: #38bdf8;
-    padding: 2px 8px;
-    border-radius: 4px;
-    text-transform: uppercase;
-  }
-  .ocr-count-badge {
-    font-size: 0.76rem;
-    color: var(--text-muted);
-  }
-  .ocr-inspector-hint {
-    padding: 6px 14px;
-    background: #090e1a;
-    font-size: 0.74rem;
-    color: var(--text-dim);
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .ocr-text-container {
-    flex: 1;
-    overflow-y: auto;
-    padding: 14px 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.86rem;
-    line-height: 1.65;
-    color: #f1f5f9;
-    user-select: text;
-    -webkit-user-select: text;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .ocr-line {
-    padding: 3px 6px;
-    border-radius: 4px;
-    transition: background 0.15s;
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    cursor: text;
-  }
-  .ocr-line:hover { background: rgba(56, 189, 248, 0.08); }
-  .ocr-line-num {
-    color: #475569;
-    font-size: 0.75rem;
-    user-select: none;
-    width: 24px;
-    text-align: right;
-    flex-shrink: 0;
-  }
-  .ocr-line-content { flex: 1; user-select: text; -webkit-user-select: text; }
-  .ocr-mark {
-    background: #f59e0b;
-    color: #000;
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-weight: 700;
-  }
-  .image-modal-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-subtle);
-  }
-
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    background: #0f172a;
-    border: 1px solid var(--accent);
-    color: #fff;
-    padding: 10px 18px;
-    border-radius: 8px;
-    font-size: 0.86rem;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.6);
-    z-index: 100000;
-    opacity: 0;
-    transform: translateY(10px);
-    transition: all 0.25s ease;
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .toast.show { opacity: 1; transform: translateY(0); }
-</style>
-</head>
-<body>
-
-  <!-- Set Folder Dialog Modal -->
-  <div id="folderModal" class="modal-overlay">
-    <div class="modal-content">
-      <h3><span class="icon-amber" id="folderModalIcon"></span> Set Folder to Index</h3>
-      <p>Choose any directory path to scan, OCR, and index all documents (<code>.xlsx</code>, <code>.docx</code>, <code>.pdf</code>, <code>.png</code>, <code>.jpg</code>, <code>.csv</code>). Subfolders will be indexed with multi-core OCR and continuously watched.</p>
-      <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:14px;">
-        <div style="display:flex; gap:8px;">
-          <button class="btn-folder-pick" style="flex:1;" onclick="pickFolderModalNative()">
-            <span class="icon-white" id="folderModalBtnIcon"></span> Browse Folder (Native Chooser)...
-          </button>
-          <input type="file" id="modalWebkitFolderInput" webkitdirectory directory multiple style="display:none;" onchange="handleModalWebkitFolder(event)">
-          <button class="btn-folder-subtle" onclick="document.getElementById('modalWebkitFolderInput').click()" title="Select via browser file picker">
-            Browser Chooser
-          </button>
-        </div>
-        <input type="text" id="folderPathInput" style="width:100%;" placeholder="Selected path will appear here...">
-      </div>
-      <div class="modal-actions">
-        <button class="btn-header" onclick="closeFolderModal()">Cancel</button>
-        <button class="btn-header primary" onclick="submitFolderIndex()">Start Indexing</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Add Quick Filter Modal -->
-  <div id="filterModal" class="modal-overlay">
-    <div class="modal-content">
-      <h3><span class="icon-pink" id="filterModalIcon"></span> Add Quick Filter</h3>
-      <p>Create a custom shortcut saved in the database for instant one-click searches.</p>
-      <div style="margin-bottom: 10px;">
-        <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Filter Label:</label>
-        <input type="text" id="filterNameInput" style="width:100%;" placeholder="e.g. VIP Target, Cairo Cases, Scanned Invoices">
-      </div>
-      <div style="margin-bottom: 14px;">
-        <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Search Query:</label>
-        <input type="text" id="filterQueryInput" style="width:100%;" placeholder="e.g. 01012345678 or سوزان or Contract...">
-      </div>
-      <div class="modal-actions">
-        <button class="btn-header" onclick="closeFilterModal()">Cancel</button>
-        <button class="btn-header primary" onclick="submitFilter()">Save Filter</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Bookmark Modal -->
-  <div id="bookmarkModal" class="modal-overlay">
-    <div class="modal-content">
-      <h3><span class="icon-pink" id="bookmarkModalIcon"></span> Bookmark / Tag Record</h3>
-      <p id="bookmarkTargetLabel" style="font-family:'JetBrains Mono', monospace; color:#38bdf8;"></p>
-      <input type="hidden" id="bmFilePath">
-      <input type="hidden" id="bmSheetName">
-      <input type="hidden" id="bmRowIdx">
-      <div style="margin-bottom: 10px;">
-        <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Tag / Classification:</label>
-        <select id="bmTagInput" style="width:100%; padding:8px; border-radius:6px; background:#090e1a; color:#fff; border:1px solid var(--border);">
-          <option value="Lead">🌟 Key Lead</option>
-          <option value="Suspect">🚨 Target / Suspect</option>
-          <option value="Reviewed">✅ Reviewed</option>
-          <option value="False Positive">❌ False Positive</option>
-        </select>
-      </div>
-      <div style="margin-bottom: 14px;">
-        <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:4px;">Notes / Annotation:</label>
-        <textarea id="bmNotesInput" rows="3" style="width:100%; padding:8px; border-radius:6px; background:#090e1a; color:#fff; border:1px solid var(--border);" placeholder="Add investigative note or reference..."></textarea>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-header" onclick="closeBookmarkModal()">Cancel</button>
-        <button class="btn-header primary" onclick="submitBookmark()">Save Bookmark</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Context Preview Modal -->
-  <div id="contextModal" class="modal-overlay">
-    <div class="modal-content" style="max-width: 700px;">
-      <h3><span class="icon-purple" id="contextModalIcon"></span> Context Window (±3 Lines)</h3>
-      <p id="contextFileLabel" style="font-size:0.8rem; color:var(--text-muted); word-break:break-all;"></p>
-      <div id="contextLinesBox" style="background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:12px; max-height:360px; overflow-y:auto; font-family:'JetBrains Mono', monospace; font-size:0.84rem; line-height:1.6;">
-        Loading context...
-      </div>
-      <div class="modal-actions">
-        <button class="btn-header primary" onclick="document.getElementById('contextModal').classList.remove('active')">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Image & Selectable OCR Visual Split Inspector Modal -->
-  <div id="imagePreviewModal" class="modal-overlay">
-    <div class="modal-content image-modal-wide">
-      <div class="image-modal-header">
-        <div class="image-modal-title">
-          <span class="icon-purple icon-lg" id="imageModalIcon"></span>
-          <div>
-            <h3 style="margin:0 0 2px 0;">Image Preview & OCR Inspector</h3>
-            <p id="imagePreviewFileLabel" style="font-size:0.78rem; color:var(--text-muted); margin:0; word-break:break-all;"></p>
-          </div>
-        </div>
-        <div class="image-modal-controls">
-          <button class="btn-header" onclick="toggleOcrBoxes()" id="ocrToggleBtn" title="Toggle OCR Word Highlight Boxes">
-            <span class="icon-cyan" id="ocrToggleIcon"></span> Boxes: ON
-          </button>
-          <button class="btn-header" onclick="zoomImage(0.2)" title="Zoom In"><span class="icon-slate" id="zoomInIcon"></span></button>
-          <button class="btn-header" onclick="zoomImage(-0.2)" title="Zoom Out"><span class="icon-slate" id="zoomOutIcon"></span></button>
-          <button class="btn-header" onclick="resetImageZoom()" title="Reset Zoom"><span class="icon-slate" id="resetZoomIcon"></span></button>
-          <button class="btn-header" onclick="closeImagePreview()" title="Close"><span class="icon-rose" id="closeModalIcon"></span></button>
-        </div>
-      </div>
-
-      <div id="imageOcrNotice" class="image-ocr-notice" style="display:none;"></div>
-
-      <div class="image-inspector-split">
-        <!-- Visual Canvas with OCR Overlay & Transparent Selectable Text Layer -->
-        <div id="imageScrollWrapper" class="image-scroll-wrapper">
-          <div id="ocrPreviewContainer" class="ocr-preview-container">
-            <img id="imagePreviewElement" src="" alt="OCR Preview" style="display:block; max-width:100%; height:auto; border-radius:4px; transform-origin: top center; transition: transform 0.15s ease;" />
-            <div id="ocrBoxesOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
-          </div>
-        </div>
-
-        <!-- Full Extracted Text Inspector Sidebar with Copy Actions -->
-        <div class="ocr-text-inspector">
-          <div class="ocr-inspector-top">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span class="ocr-panel-pill">Extracted Text</span>
-              <span id="ocrWordsCountBadge" class="ocr-count-badge">0 words</span>
-            </div>
-            <div style="display:flex; gap:6px;">
-              <button class="btn-header primary" onclick="copyAllOcrText()" title="Copy entire extracted text">
-                <span class="icon-white" id="copyAllIcon"></span> Copy All Text
-              </button>
-              <button class="btn-header" onclick="copySelectedOcrText()" title="Copy text currently highlighted with mouse">
-                ✂️ Copy Selection
-              </button>
-            </div>
-          </div>
-          <div class="ocr-inspector-hint">
-            💡 Select any text with your mouse or drag across words on the image to copy directly.
-          </div>
-          <div id="ocrTextContainer" class="ocr-text-container" tabindex="0">
-            <div style="color:#64748b; padding:20px; text-align:center;">Loading extracted text...</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="image-modal-footer">
-        <span id="ocrStatusDetails" style="font-size:0.78rem; color:var(--text-muted); margin-right:auto; align-self:center;"></span>
-        <button class="btn-header primary" onclick="closeImagePreview()">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden File Input for Importing DB -->
-  <input type="file" id="dbFileInput" accept=".db,.sqlite,.sqlite3" style="display:none;" onchange="handleImportFile(event)">
-
-  <!-- Header -->
-  <div class="header">
-    <div class="header-brand">
-      <h1>
-        <span class="icon-cyan icon-lg" id="appLogoIcon"></span>
-        OmniSearch
-      </h1>
-      <span class="subtitle">Universal Archive & Intelligence Explorer</span>
-    </div>
-
-    <div class="header-actions">
-      <!-- Minimalist Watcher Toggle Switch -->
-      <div class="watcher-switch" id="watcherBadge" onclick="toggleWatcher()" title="Click to toggle continuous file monitoring">
-        <span class="watcher-dot active" id="watcherDot"></span>
-        <span id="watcherLabel" style="color:#10b981;">Watcher Active</span>
-      </div>
-
-      <span class="stats-pill" id="statsBadge">Loading...</span>
-
-      <button class="btn-header primary" onclick="openFolderModal()">
-        <span class="icon-white" id="headerFolderIcon"></span> + Index Folder
-      </button>
-
-      <!-- Tools Dropdown Menu to prevent UI clutter -->
-      <div class="dropdown" id="toolsDropdown">
-        <button class="btn-header" onclick="toggleToolsDropdown(event)">
-          <span class="icon-slate" id="toolsIcon"></span> Tools ▾
-        </button>
-        <div class="dropdown-content">
-          <button class="dropdown-item" onclick="viewBookmarks()">
-            <span class="icon-pink" id="menuBookmarkIcon"></span> Bookmarks (<span id="bmCountBadge">0</span>)
-          </button>
-          <button class="dropdown-item" onclick="triggerBackup()">
-            <span class="icon-emerald" id="menuBackupIcon"></span> Snapshot Backup
-          </button>
-          <button class="dropdown-item" onclick="exportIndex()">
-            <span class="icon-blue" id="menuExportIcon"></span> Export Index (.db)
-          </button>
-          <button class="dropdown-item" onclick="document.getElementById('dbFileInput').click()">
-            <span class="icon-cyan" id="menuImportIcon"></span> Import Index (.db)
-          </button>
-          <button class="dropdown-item" onclick="exportCSV()">
-            <span class="icon-emerald" id="menuCsvIcon"></span> Export Results CSV
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Top Navigation Tabs -->
-  <div class="nav-tabs">
-    <button id="tabBtnGlobal" class="nav-tab-btn active" onclick="switchMainTab('global')">
-      <span class="icon-cyan" id="tabGlobalIcon"></span>
-      Universal Archive
-      <span class="nav-tab-badge">Full</span>
-    </button>
-    <button id="tabBtnScoped" class="nav-tab-btn" onclick="switchMainTab('scoped')">
-      <span class="icon-indigo" id="tabScopedIcon"></span>
-      Scoped Target Search
-      <span class="nav-tab-badge" id="scopedTargetBadge">Folder or File</span>
-    </button>
-  </div>
-
-  <!-- TAB 1: GLOBAL ARCHIVE SEARCH -->
-  <div id="tabGlobalPane">
-    <!-- Progress Banner -->
-    <div id="progressBanner" class="progress-banner">
-      <div class="progress-info">
-        <span id="progressStatus" style="font-weight: 600; color: #f8fafc;">Indexing documents...</span>
-        <span id="progressPercent" style="font-weight: 700; color: var(--accent);">0%</span>
-      </div>
-      <div class="progress-bar-bg">
-        <div id="progressBarFill" class="progress-bar-fill"></div>
-      </div>
-      <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.76rem; color:var(--text-muted);">
-        <span id="progressCurrentFile">Scanning...</span>
-        <span id="progressRecords">0 records indexed</span>
-      </div>
-    </div>
-
-    <!-- Search Hero Box -->
-    <div class="search-container">
-      <!-- Search Mode Switcher (General Search default vs Telecom/CDR) -->
-      <div class="search-mode-row">
-        <div class="search-mode-pills">
-          <button id="modeBtnGeneral" class="mode-pill active" onclick="setSearchMode('general')" title="Universal full-text document search">
-            <span class="icon-cyan" id="modeGeneralIcon"></span> General Search
-          </button>
-          <button id="modeBtnTelecom" class="mode-pill telecom-mode" onclick="setSearchMode('telecom')" title="Investigative phone & CDR records explorer">
-            <span class="icon-emerald" id="modeTelecomIcon"></span> Telecom / CDR Mode
-          </button>
-        </div>
-        <span class="mode-desc-text" id="modeDescText">📄 Universal search across documents, PDFs, OCR, sheets & text</span>
-      </div>
-
-      <div class="search-bar-row">
-        <span class="search-icon-inside icon-cyan" id="searchHeroIcon"></span>
-        <input type="text" id="queryInput" placeholder="Search keywords, Egyptian/EN names, phones, IDs, snippets, OCR images..." oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
-        <button id="clearSearchBtn" class="clear-btn" onclick="clearSearch()" title="Clear">
-          <span class="icon-rose" id="clearSearchIcon"></span>
-        </button>
-        <button class="btn-search" onclick="doSearch(0)">
-          <span class="icon-slate" id="btnSearchIcon"></span> Search
-        </button>
-      </div>
-
-      <!-- Segmented Category Filters -->
-      <div class="filter-tabs-row">
-        <button class="filter-pill active" onclick="setTypeFilter('all', this)">
-          <span class="icon-amber" id="filterAllIcon"></span> All
-        </button>
-        <button class="filter-pill" onclick="setTypeFilter('doc', this)">
-          <span class="icon-rose" id="filterDocIcon"></span> Documents
-        </button>
-        <button class="filter-pill" onclick="setTypeFilter('sheet', this)">
-          <span class="icon-emerald" id="filterSheetIcon"></span> Spreadsheets
-        </button>
-        <button class="filter-pill" onclick="setTypeFilter('image', this)">
-          <span class="icon-purple" id="filterImageIcon"></span> Images & OCR
-        </button>
-        <button class="filter-pill" onclick="setTypeFilter('phone', this)">
-          <span class="icon-teal" id="filterPhoneIcon"></span> Phone & CDR
-        </button>
-      </div>
-
-      <!-- Saved Quick Shortcuts -->
-      <div class="quick-chips" id="quickChipsContainer">
-        <span style="color:var(--text-dim);">Shortcuts:</span>
-        <div id="quickChipsList" style="display:inline-flex; flex-wrap:wrap; gap:5px; align-items:center;">
-          <!-- Populated from DB -->
-        </div>
-        <button class="btn-add-chip" onclick="openFilterModal()" title="Save custom search filter">+ Add</button>
-      </div>
-    </div>
-
-    <!-- Results Status Bar & View Toggle -->
-    <div class="status-bar">
-      <div>
-        <span id="resultsCount" style="font-weight:600; color:#f8fafc;">Ready</span>
-        <span style="margin-left:6px; opacity:0.6;" id="timing">0ms</span>
-      </div>
-      <div class="view-toggle">
-        <button id="btnViewCard" class="view-btn active" onclick="switchView('card')">
-          <span class="icon-indigo" id="viewCardIcon"></span> Cards
-        </button>
-        <button id="btnViewTable" class="view-btn" onclick="switchView('table')">
-          <span class="icon-slate" id="viewTableIcon"></span> Dense Grid
-        </button>
-      </div>
-    </div>
-
-    <!-- Top Pagination Bar -->
-    <div id="topPaginationBar" class="pagination-bar top-bar" style="display:none;">
-      <span id="topPageInfo">Showing 0-0 of 0</span>
-      <div class="pagination-btns">
-        <button id="topPrevBtn" class="page-btn" onclick="changePage(-1)">← Prev</button>
-        <span id="topPageNumberBadge" style="font-weight:600; color:var(--accent);">Page 1</span>
-        <button id="topNextBtn" class="page-btn" onclick="changePage(1)">Next →</button>
-      </div>
-    </div>
-
-    <!-- Results Containers -->
-    <div id="cardsContainer" class="cards-container">
-      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
-        Enter any keyword, name, or phone number above to search across the entire archive.
-      </div>
-    </div>
-
-    <div id="tableContainer" class="table-container" style="display:none;">
-      <table id="resultsTable">
-        <thead>
-          <tr id="tableHead">
-            <th>File</th>
-            <th>Time</th>
-            <th>Dir</th>
-            <th>Target</th>
-            <th>Other Party</th>
-            <th>Name</th>
-            <th>Duration / Extra</th>
-            <th>Location / Cell</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody id="tableBody">
-          <tr>
-            <td colspan="9" style="text-align:center; padding: 40px; color:#64748b;">Enter any query above to search.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Pagination -->
-    <div id="paginationBar" class="pagination-bar" style="display:none;">
-      <span id="pageInfo">Showing 0-0 of 0</span>
-      <div class="pagination-btns">
-        <button id="prevBtn" class="page-btn" onclick="changePage(-1)">← Prev</button>
-        <span id="pageNumberBadge" style="font-weight:600; color:var(--accent);">Page 1</span>
-        <button id="nextBtn" class="page-btn" onclick="changePage(1)">Next →</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- TAB 2: SCOPED / TARGET SEARCH -->
-  <div id="tabScopedPane" style="display:none;">
-    <div class="scoped-config-card">
-      <div class="scoped-methods">
-        <!-- Option 1: Native Folder Chooser -->
-        <div class="scoped-box">
-          <h4>
-            <span class="icon-amber" id="scopedFolderBoxIcon"></span>
-            Target Folder or Document
-          </h4>
-          <p>Choose any directory or single file on your system to isolate and search exclusively within it.</p>
-          <div class="folder-picker-actions">
-            <button class="btn-folder-pick" onclick="pickFolderNative()">
-              <span class="icon-white" id="scopedPickBtnIcon"></span> Browse Folder...
-            </button>
-            <button class="btn-file-pick" onclick="pickFileNative()" title="Select single file or image">
-              <span class="icon-blue" id="scopedPickFileIcon"></span> Choose File...
-            </button>
-            <input type="file" id="webkitFolderInput" webkitdirectory directory multiple style="display:none;" onchange="handleWebkitFolderSelect(event)">
-            <button class="btn-folder-subtle" onclick="document.getElementById('webkitFolderInput').click()" title="Select directory in browser">
-              Browser Chooser
-            </button>
-          </div>
-        </div>
-
-        <!-- Option 2: Upload File / Image -->
-        <div class="scoped-box">
-          <h4>
-            <span class="icon-cyan" id="scopedUploadBoxIcon"></span>
-            Drop File or Image
-          </h4>
-          <p>Drop any spreadsheet (<code>.xlsx</code>, <code>.csv</code>), PDF, or image (<code>.png</code>, <code>.jpg</code>) for instant OCR & scoped lookup.</p>
-          <div class="drop-zone" id="scopedDropZone" onclick="document.getElementById('scopedFileInput').click()">
-            <input type="file" id="scopedFileInput" style="display:none;" onchange="handleScopedFileUpload(event)" accept=".xlsx,.xls,.csv,.tsv,.docx,.odt,.txt,.pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp">
-            <div style="margin-bottom:4px;">
-              <span class="icon-purple icon-lg" id="scopedDropIcon"></span>
-            </div>
-            <p><b>Click or Drag & Drop</b> document or picture</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Active Scope Banner -->
-      <div id="activeScopeBanner" class="active-scope-banner" style="display:none;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span class="icon-amber icon-lg" id="activeScopeIcon"></span>
-          <div>
-            <span style="font-size:0.75rem; color:var(--text-muted); display:block;">Active Scope Target:</span>
-            <span class="scope-name-tag" id="activeScopeLabel">None</span>
-          </div>
-        </div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn-header" onclick="document.getElementById('scopedQueryInput').focus()">Search Scope</button>
-          <button class="btn-clear-scope" onclick="clearScopedTarget()">✕ Clear</button>
-        </div>
-      </div>
-
-      <!-- Scoped Search Mode Switcher -->
-      <div class="search-mode-row" style="margin-bottom:8px;">
-        <div class="search-mode-pills">
-          <button id="scopedModeBtnGeneral" class="mode-pill active" onclick="setScopedSearchMode('general')" title="Universal full-text document search">
-            <span class="icon-cyan" id="scopedModeGeneralIcon"></span> General Search
-          </button>
-          <button id="scopedModeBtnTelecom" class="mode-pill telecom-mode" onclick="setScopedSearchMode('telecom')" title="Investigative phone & CDR records explorer">
-            <span class="icon-emerald" id="scopedModeTelecomIcon"></span> Telecom / CDR Mode
-          </button>
-        </div>
-        <span class="mode-desc-text" id="scopedModeDescText">Target document lookup</span>
-      </div>
-
-      <!-- Scoped Search Input -->
-      <div class="search-bar-row" style="background:#090e1a; padding:12px; border-radius:8px; border:1px solid var(--border);">
-        <span class="search-icon-inside icon-cyan" id="searchScopedHeroIcon" style="left:24px;"></span>
-        <input type="text" id="scopedQueryInput" placeholder="Search exclusively inside the locked target above..." oninput="handleScopedInput(event)" onkeydown="if(event.key==='Enter') doScopedSearch(0)" style="padding-left:42px;">
-        <button id="clearScopedSearchBtn" class="clear-btn" onclick="clearScopedSearch()" title="Clear">
-          <span class="icon-rose" id="clearScopedIcon"></span>
-        </button>
-        <button class="btn-search" onclick="doScopedSearch(0)">Search Target</button>
-      </div>
-    </div>
-
-    <!-- Scoped Status & View Toggle -->
-    <div class="status-bar">
-      <div>
-        <span id="scopedResultsCount">Choose a folder or drop a file above to begin.</span>
-        <span style="margin-left:6px; opacity:0.6;" id="scopedTiming">0ms</span>
-      </div>
-      <div class="view-toggle">
-        <button id="btnScopedViewCard" class="view-btn active" onclick="switchScopedView('card')">
-          <span class="icon-indigo" id="scopedViewCardIcon"></span> Cards
-        </button>
-        <button id="btnScopedViewTable" class="view-btn" onclick="switchScopedView('table')">
-          <span class="icon-slate" id="scopedViewTableIcon"></span> Tabular
-        </button>
-      </div>
-    </div>
-
-    <!-- Scoped Top Pagination Bar -->
-    <div id="scopedTopPaginationBar" class="pagination-bar top-bar" style="display:none;">
-      <span id="scopedTopPageInfo">Showing 0-0 of 0</span>
-      <div class="pagination-btns">
-        <button id="scopedTopPrevBtn" class="page-btn" onclick="changeScopedPage(-1)">← Prev</button>
-        <span id="scopedTopPageNumberBadge" style="font-weight:600; color:var(--accent);">Page 1</span>
-        <button id="scopedTopNextBtn" class="page-btn" onclick="changeScopedPage(1)">Next →</button>
-      </div>
-    </div>
-
-    <div id="scopedCardsContainer" class="cards-container">
-      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
-        No target selected yet. Choose a folder or file above.
-      </div>
-    </div>
-
-    <div id="scopedTableContainer" class="table-container" style="display:none;">
-      <table id="scopedResultsTable">
-        <thead>
-          <tr id="scopedTableHead">
-            <th>File</th>
-            <th>Time</th>
-            <th>Dir</th>
-            <th>Target</th>
-            <th>Other Party</th>
-            <th>Name</th>
-            <th>Duration / Extra</th>
-            <th>Location / Cell</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody id="scopedTableBody">
-          <tr>
-            <td colspan="9" style="text-align:center; padding: 40px; color:#64748b;">No records loaded.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div id="scopedPaginationBar" class="pagination-bar" style="display:none;">
-      <span id="scopedPageInfo">Showing 0-0 of 0</span>
-      <div class="pagination-btns">
-        <button id="scopedPrevBtn" class="page-btn" onclick="changeScopedPage(-1)">← Prev</button>
-        <span id="scopedPageNumberBadge" style="font-weight:600; color:var(--accent);">Page 1</span>
-        <button id="scopedNextBtn" class="page-btn" onclick="changeScopedPage(1)">Next →</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Floating Scroll To Top / Bottom Buttons -->
-  <div class="scroll-nav-container">
-    <button class="scroll-nav-btn" onclick="scrollToTop()" title="Scroll to top">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:18px; height:18px;"><polyline points="18 15 12 9 6 15"></polyline></svg>
-    </button>
-    <button class="scroll-nav-btn" onclick="scrollToBottom()" title="Scroll to bottom">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:18px; height:18px;"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-  </div>
-
-  <div id="toast" class="toast">Opening file...</div>
-
-<script>
-/* SVG Icon Set */
-const SVG_RAW = {
-  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
-  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>',
-  pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="15" x2="15" y2="15"></line></svg>',
-  excel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>',
-  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
-  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>',
-  text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><line x1="17" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="17" y1="18" x2="3" y2="18"></line></svg>',
-  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>',
-  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
-  cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
-  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>',
-  context: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>',
-  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>',
-  target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>',
-  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
-  zoomIn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>',
-  zoomOut: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>',
-  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>',
-  cardView: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>',
-  tableView: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="3" y1="21" x2="21" y2="21"></line><line x1="9" y1="3" x2="9" y2="21"></line></svg>',
-  globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>',
-  upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>',
-  database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>',
-  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
-  sparkles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
-  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-svg"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
-};
-
-function injectStaticIcons() {
-  const setIcon = (id, svgHtml) => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = svgHtml;
-  };
-  setIcon('appLogoIcon', SVG_RAW.globe);
-  setIcon('headerFolderIcon', SVG_RAW.folder);
-  setIcon('toolsIcon', SVG_RAW.settings);
-  setIcon('menuBookmarkIcon', SVG_RAW.tag);
-  setIcon('menuBackupIcon', SVG_RAW.database);
-  setIcon('menuExportIcon', SVG_RAW.download);
-  setIcon('menuImportIcon', SVG_RAW.upload);
-  setIcon('menuCsvIcon', SVG_RAW.excel);
-
-  setIcon('tabGlobalIcon', SVG_RAW.globe);
-  setIcon('tabScopedIcon', SVG_RAW.target);
-
-  setIcon('modeGeneralIcon', SVG_RAW.search);
-  setIcon('modeTelecomIcon', SVG_RAW.phone);
-  setIcon('scopedModeGeneralIcon', SVG_RAW.search);
-  setIcon('scopedModeTelecomIcon', SVG_RAW.phone);
-
-  setIcon('searchHeroIcon', SVG_RAW.search);
-  setIcon('clearSearchIcon', SVG_RAW.cross);
-  setIcon('btnSearchIcon', SVG_RAW.search);
-
-  setIcon('filterAllIcon', SVG_RAW.sparkles);
-  setIcon('filterDocIcon', SVG_RAW.pdf);
-  setIcon('filterSheetIcon', SVG_RAW.excel);
-  setIcon('filterImageIcon', SVG_RAW.image);
-  setIcon('filterPhoneIcon', SVG_RAW.phone);
-
-  setIcon('viewCardIcon', SVG_RAW.cardView);
-  setIcon('viewTableIcon', SVG_RAW.tableView);
-
-  setIcon('scopedFolderBoxIcon', SVG_RAW.folder);
-  setIcon('scopedPickBtnIcon', SVG_RAW.folder);
-  setIcon('scopedPickFileIcon', SVG_RAW.doc);
-  setIcon('scopedUploadBoxIcon', SVG_RAW.upload);
-  setIcon('scopedDropIcon', SVG_RAW.image);
-  setIcon('activeScopeIcon', SVG_RAW.folder);
-  setIcon('searchScopedHeroIcon', SVG_RAW.search);
-  setIcon('clearScopedIcon', SVG_RAW.cross);
-  setIcon('scopedViewCardIcon', SVG_RAW.cardView);
-  setIcon('scopedViewTableIcon', SVG_RAW.tableView);
-
-  setIcon('folderModalIcon', SVG_RAW.folder);
-  setIcon('folderModalBtnIcon', SVG_RAW.folder);
-  setIcon('filterModalIcon', SVG_RAW.tag);
-  setIcon('bookmarkModalIcon', SVG_RAW.tag);
-  setIcon('contextModalIcon', SVG_RAW.context);
-
-  setIcon('imageModalIcon', SVG_RAW.image);
-  setIcon('ocrToggleIcon', SVG_RAW.eye);
-  setIcon('zoomInIcon', SVG_RAW.zoomIn);
-  setIcon('zoomOutIcon', SVG_RAW.zoomOut);
-  setIcon('resetZoomIcon', SVG_RAW.refresh);
-  setIcon('closeModalIcon', SVG_RAW.cross);
-  setIcon('copyAllIcon', SVG_RAW.copy);
-}
-
-function toggleToolsDropdown(e) {
-  e.stopPropagation();
-  document.getElementById('toolsDropdown').classList.toggle('open');
-}
-
-document.addEventListener('click', () => {
-  const dd = document.getElementById('toolsDropdown');
-  if (dd) dd.classList.remove('open');
-});
-
-let currentPage = 0;
-const pageSize = 50;
-let currentQuery = '';
-let activeTypeFilter = 'all';
-let currentSearchMode = 'general';
-let totalResults = 0;
-let lastResults = [];
-let progressPollInterval = null;
-let currentViewMode = 'card';
-let debounceTimer = null;
-
-function setSearchMode(mode) {
-  currentSearchMode = mode;
-  const isGeneral = (mode === 'general');
-  document.getElementById('modeBtnGeneral').classList.toggle('active', isGeneral);
-  document.getElementById('modeBtnTelecom').classList.toggle('active', !isGeneral);
-
-  const desc = document.getElementById('modeDescText');
-  const input = document.getElementById('queryInput');
-  if (isGeneral) {
-    desc.innerText = '📄 Universal search across documents, PDFs, OCR, sheets & text';
-    input.placeholder = 'Search keywords, document text, topics, Egyptian/EN names, OCR images...';
-  } else {
-    desc.innerText = '📞 CDR caller, callee, tower cell, duration & phone intelligence';
-    input.placeholder = 'Search phone numbers (e.g. 010..., 2012...), caller/callee, IMEI/IMSI, cell towers...';
-  }
-
-  if (currentQuery) {
-    doSearch(0);
-  }
-}
-
-function showToast(msg, duration = 3000) {
-  const toast = document.getElementById('toast');
-  toast.innerHTML = msg;
-  toast.classList.add('show');
-  setTimeout(() => {
-    toast.classList.remove('show');
-  }, duration);
-}
-
-function copyToClipboard(text, label = 'Copied') {
-  if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    showToast(`📋 ${label}: ${escapeHtml(text.slice(0, 35))}${text.length > 35 ? '...' : ''}`);
-  }).catch(() => {
-    showToast(`📋 Copied to clipboard`);
-  });
-}
-
-function switchView(mode) {
-  currentViewMode = mode;
-  document.getElementById('btnViewCard').classList.toggle('active', mode === 'card');
-  document.getElementById('btnViewTable').classList.toggle('active', mode === 'table');
-  document.getElementById('cardsContainer').style.display = (mode === 'card') ? 'flex' : 'none';
-  document.getElementById('tableContainer').style.display = (mode === 'table') ? 'block' : 'none';
-  if (lastResults && lastResults.length > 0) {
-    renderFilteredResults();
-  }
-}
-
-function handleInput(e) {
-  const val = e.target.value.trim();
-  document.getElementById('clearSearchBtn').style.display = val ? 'block' : 'none';
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
-    if (val.length >= 2 || val.length === 0) {
-      doSearch(0);
-    }
-  }, 350);
-}
-
-function clearSearch() {
-  document.getElementById('queryInput').value = '';
-  document.getElementById('clearSearchBtn').style.display = 'none';
-  document.getElementById('queryInput').focus();
-  doSearch(0);
-}
-
-function setTypeFilter(type, btnEl) {
-  activeTypeFilter = type;
-  document.querySelectorAll('.filter-tabs-row .filter-pill').forEach(el => el.classList.remove('active'));
-  if (btnEl) btnEl.classList.add('active');
-  renderFilteredResults();
-}
-
-function renderFilteredResults() {
-  if (!lastResults) return;
-  let filtered = lastResults;
-  if (activeTypeFilter === 'doc') {
-    filtered = lastResults.filter(r => {
-      const ext = (r.file || '').split('.').pop().toLowerCase();
-      return ['pdf', 'docx', 'doc', 'odt', 'txt'].includes(ext);
-    });
-  } else if (activeTypeFilter === 'sheet') {
-    filtered = lastResults.filter(r => {
-      const ext = (r.file || '').split('.').pop().toLowerCase();
-      return ['xlsx', 'xls', 'csv', 'tsv'].includes(ext);
-    });
-  } else if (activeTypeFilter === 'image') {
-    filtered = lastResults.filter(r => isImageFile(r.file));
-  } else if (activeTypeFilter === 'phone') {
-    filtered = lastResults.filter(r => (r.target && r.target !== '—') || (r.other && r.other !== '—') || r.phone);
-  }
-
-  document.getElementById('resultsCount').innerText = `${filtered.length.toLocaleString()} result(s)`;
-  renderCards(filtered);
-  renderTableRows(filtered);
-
-  // If user specifically filtered by image and results exist, preview first image
-  if (activeTypeFilter === 'image' && filtered.length > 0) {
-    const firstImg = filtered[0];
-    showImagePreview(firstImg.path, firstImg.sheet, currentQuery);
-  }
-}
-
-async function refreshStats() {
-  try {
-    const res = await fetch('/api/stats');
-    const data = await res.json();
-    document.getElementById('statsBadge').innerText = `${(data.files || 0).toLocaleString()} files • ${(data.records || 0).toLocaleString()} entries`;
-    if (typeof data.watcher !== 'undefined') {
-      updateWatcherUI(data.watcher);
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function refreshWatcherStatus() {
-  try {
-    const res = await fetch('/api/watch/status');
-    const data = await res.json();
-    updateWatcherUI(data.active);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function updateWatcherUI(isActive) {
-  const dot = document.getElementById('watcherDot');
-  const label = document.getElementById('watcherLabel');
-  if (isActive) {
-    dot.className = 'watcher-dot active';
-    label.innerText = 'Watcher Active';
-    label.style.color = '#10b981';
-  } else {
-    dot.className = 'watcher-dot paused';
-    label.innerText = 'Watcher Paused';
-    label.style.color = '#94a3b8';
-  }
-}
-
-async function toggleWatcher() {
-  try {
-    const res = await fetch('/api/watch/toggle', { method: 'POST' });
-    const data = await res.json();
-    updateWatcherUI(data.active);
-    showToast(data.message || (data.active ? "Watcher turned ON" : "Watcher turned OFF"));
-  } catch (e) {
-    showToast("❌ Network error toggling watcher");
-  }
-}
-
-function openFolderModal() {
-  document.getElementById('folderModal').classList.add('active');
-}
-
-function closeFolderModal() {
-  document.getElementById('folderModal').classList.remove('active');
-}
-
-async function pickFolderModalNative() {
-  try {
-    const res = await fetch('/api/dialog/pick-folder');
-    const data = await res.json();
-    if (data.ok && data.path) {
-      document.getElementById('folderPathInput').value = data.path;
-      showToast(`Selected: ${data.path}`);
-    }
-  } catch (err) {
-    showToast("❌ Could not open folder chooser");
-  }
-}
-
-function handleModalWebkitFolder(e) {
-  const files = e.target.files;
-  if (files && files.length > 0) {
-    const firstFile = files[0];
-    const path = firstFile.webkitRelativePath ? firstFile.webkitRelativePath.split('/')[0] : firstFile.name;
-    document.getElementById('folderPathInput').value = path;
-    showToast(`Selected: ${path}`);
-  }
-}
-
-async function submitFolderIndex() {
-  const folder = document.getElementById('folderPathInput').value.trim();
-  if (!folder) {
-    alert("Please choose or enter a folder path!");
-    return;
-  }
-  closeFolderModal();
-  showToast(`⚡ Starting indexing for ${folder}...`);
-  try {
-    const res = await fetch(`/api/index/start?folder=${encodeURIComponent(folder)}`, { method: 'POST' });
-    const data = await res.json();
-    if (data.ok) {
-      showToast("Indexing launched! Watching progress...");
-      pollProgress();
-    } else {
-      alert(data.error || "Failed to start indexing.");
-    }
-  } catch (e) {
-    showToast("❌ Network error starting indexing");
-  }
-}
-
-function pollProgress() {
-  if (progressPollInterval) clearInterval(progressPollInterval);
-  const banner = document.getElementById('progressBanner');
-  banner.style.display = 'block';
-
-  progressPollInterval = setInterval(async () => {
-    try {
-      const res = await fetch('/api/progress');
-      const data = await res.json();
-      
-      const pct = Math.round(data.percent || 0);
-      document.getElementById('progressBarFill').style.width = pct + '%';
-      document.getElementById('progressPercent').innerText = pct + '%';
-      document.getElementById('progressStatus').innerText = data.status || 'Indexing...';
-      document.getElementById('progressCurrentFile').innerText = data.current_file || '';
-      document.getElementById('progressRecords').innerText = `${(data.records_indexed || 0).toLocaleString()} records indexed`;
-
-      if (!data.in_progress && pct >= 100) {
-        clearInterval(progressPollInterval);
-        setTimeout(() => {
-          banner.style.display = 'none';
-          refreshStats();
-          showToast("✅ Indexing completed!");
-        }, 1800);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, 1000);
-}
-
-function openFilterModal() {
-  document.getElementById('filterNameInput').value = '';
-  document.getElementById('filterQueryInput').value = '';
-  document.getElementById('filterModal').classList.add('active');
-}
-
-function closeFilterModal() {
-  document.getElementById('filterModal').classList.remove('active');
-}
-
-async function submitFilter() {
-  const name = document.getElementById('filterNameInput').value.trim();
-  const query = document.getElementById('filterQueryInput').value.trim();
-  if (!name || !query) {
-    alert("Please fill in both name and query!");
-    return;
-  }
-  closeFilterModal();
-  try {
-    const res = await fetch('/api/filters/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, query })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ Added filter "${name}"`);
-      loadQuickFilters();
-    } else {
-      alert("Failed to save filter.");
-    }
-  } catch (e) {
-    showToast("❌ Network error saving filter");
-  }
-}
-
-async function loadQuickFilters() {
-  try {
-    const res = await fetch('/api/filters');
-    const data = await res.json();
-    const list = document.getElementById('quickChipsList');
-    list.innerHTML = '';
-    data.filters.forEach(f => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.innerHTML = `${SVG_RAW.tag} ${escapeHtml(f.name)}`;
-      chip.title = `Query: ${f.query} (Right click to delete)`;
-      chip.onclick = () => {
-        document.getElementById('queryInput').value = f.query;
-        document.getElementById('clearSearchBtn').style.display = 'block';
-        doSearch(0);
-      };
-      chip.oncontextmenu = async (e) => {
-        e.preventDefault();
-        if (confirm(`Delete filter "${f.name}"?`)) {
-          await deleteQuickFilter(f.id);
-        }
-      };
-      list.appendChild(chip);
-    });
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function deleteQuickFilter(id) {
-  try {
-    const res = await fetch('/api/filters/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast("Filter removed");
-      loadQuickFilters();
-    }
-  } catch (e) {
-    showToast("❌ Network error removing filter");
-  }
-}
-
-function openBookmarkModal(file, sheet, row, targetPhone) {
-  document.getElementById('bmFilePath').value = file;
-  document.getElementById('bmSheetName').value = sheet;
-  document.getElementById('bmRowIdx').value = row;
-  document.getElementById('bmNotesInput').value = '';
-  document.getElementById('bookmarkTargetLabel').innerText = `${file.split('/').pop()} • ${sheet} • Row ${row} ${targetPhone ? '(' + targetPhone + ')' : ''}`;
-  document.getElementById('bookmarkModal').classList.add('active');
-}
-
-function closeBookmarkModal() {
-  document.getElementById('bookmarkModal').classList.remove('active');
-}
-
-async function submitBookmark() {
-  const file = document.getElementById('bmFilePath').value;
-  const sheet = document.getElementById('bmSheetName').value;
-  const row = parseInt(document.getElementById('bmRowIdx').value, 10);
-  const tag = document.getElementById('bmTagInput').value;
-  const notes = document.getElementById('bmNotesInput').value.trim();
-
-  closeBookmarkModal();
-  try {
-    const res = await fetch('/api/bookmarks/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file, sheet, row, tag, notes })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`🔖 Bookmarked as [${tag}]`);
-      refreshBookmarkCount();
-    } else {
-      alert("Failed to bookmark record.");
-    }
-  } catch (e) {
-    showToast("❌ Network error bookmarking record");
-  }
-}
-
-async function refreshBookmarkCount() {
-  try {
-    const res = await fetch('/api/bookmarks');
-    const data = await res.json();
-    document.getElementById('bmCountBadge').innerText = data.bookmarks.length;
-  } catch (e) {}
-}
-
-async function viewBookmarks() {
-  try {
-    const res = await fetch('/api/bookmarks');
-    const data = await res.json();
-    if (data.bookmarks.length === 0) {
-      showToast("No bookmarks saved yet");
-      return;
-    }
-    const fakeRows = data.bookmarks.map(b => ({
-      file: b.file_path.split('/').pop(),
-      path: b.file_path,
-      sheet: b.sheet_name,
-      row: b.row_idx,
-      target: b.tag,
-      other: b.notes || '—',
-      name: '—',
-      time: b.created_at || '—',
-      dir: '—',
-      snippet: `[${b.tag}] ${b.notes || 'No annotation'}`
-    }));
-    totalResults = fakeRows.length;
-    lastResults = fakeRows;
-    renderCards(fakeRows);
-    document.getElementById('resultsCount').innerText = `${fakeRows.length} Bookmarks loaded`;
-  } catch (e) {
-    showToast("❌ Network error fetching bookmarks");
-  }
-}
-
-async function doSearch(page = 0) {
-  const q = document.getElementById('queryInput').value.trim();
-  if (!q) {
-    lastResults = [];
-    totalResults = 0;
-    renderViewData({ rows: [], total: 0 });
-    document.getElementById('resultsCount').innerText = "Ready";
-    document.getElementById('timing').innerText = "0ms";
-    return;
-  }
-
-  currentPage = page;
-  currentQuery = q;
-  const offset = currentPage * pageSize;
-
-  const t0 = performance.now();
-  document.getElementById('resultsCount').innerText = "Searching...";
-
-  try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&limit=${pageSize}&offset=${offset}&mode=${encodeURIComponent(currentSearchMode)}`);
-    const data = await res.json();
-    const t1 = performance.now();
-    document.getElementById('timing').innerText = `${Math.round(t1 - t0)}ms`;
-
-    renderViewData(data);
-  } catch (e) {
-    console.error(e);
-    document.getElementById('resultsCount').innerText = "Search error";
-  }
-}
-
-function changePage(delta) {
-  const newPage = currentPage + delta;
-  if (newPage >= 0 && (newPage * pageSize) < totalResults) {
-    doSearch(newPage);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-}
-
-function scrollToTop() {
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function scrollToBottom() {
-  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-}
-
-function escapeHtml(text) {
-  if (!text) return '';
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function highlightMatch(text, query) {
-  if (!text) return '';
-  const escaped = escapeHtml(text);
-  if (!query) return escaped;
-
-  const cleanQuery = query.trim().replace(/"/g, '');
-  if (!cleanQuery) return escaped;
-
-  const terms = cleanQuery.split(/\s+/).filter(t => t.length > 0);
-  if (terms.length === 0) return escaped;
-
-  const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const regex = new RegExp(`(${pattern})`, 'gi');
-  return escaped.replace(regex, '<mark class="match-hl">$1</mark>');
-}
-
-function getFileExtBadge(filename) {
-  const ext = (filename || '').split('.').pop().toLowerCase();
-  if (ext === 'pdf') {
-    return `<span class="file-type-pill pill-pdf">${SVG_RAW.pdf} PDF</span>`;
-  } else if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) {
-    return `<span class="file-type-pill pill-xlsx">${SVG_RAW.excel} ${ext.toUpperCase()}</span>`;
-  } else if (['docx', 'doc', 'odt'].includes(ext)) {
-    return `<span class="file-type-pill pill-docx">${SVG_RAW.doc} ${ext.toUpperCase()}</span>`;
-  } else if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff'].includes(ext)) {
-    return `<span class="file-type-pill pill-image">${SVG_RAW.image} ${ext.toUpperCase()}</span>`;
-  } else {
-    return `<span class="file-type-pill pill-txt">${SVG_RAW.text} ${ext.toUpperCase() || 'FILE'}</span>`;
-  }
-}
-
-function renderViewData(data) {
-  lastResults = data.rows || [];
-  totalResults = data.total || 0;
-  const paginationBar = document.getElementById('paginationBar');
-  const topPaginationBar = document.getElementById('topPaginationBar');
-
-  if (totalResults > pageSize) {
-    const start = currentPage * pageSize + 1;
-    const end = Math.min((currentPage + 1) * pageSize, totalResults);
-    const infoText = `Showing ${start.toLocaleString()}-${end.toLocaleString()} of ${totalResults.toLocaleString()} records`;
-    const pageBadgeText = `Page ${currentPage + 1} of ${Math.ceil(totalResults / pageSize)}`;
-    const isPrevDisabled = (currentPage === 0);
-    const isNextDisabled = ((currentPage + 1) * pageSize >= totalResults);
-
-    paginationBar.style.display = 'flex';
-    document.getElementById('pageInfo').innerText = infoText;
-    document.getElementById('pageNumberBadge').innerText = pageBadgeText;
-    document.getElementById('prevBtn').disabled = isPrevDisabled;
-    document.getElementById('nextBtn').disabled = isNextDisabled;
-
-    if (topPaginationBar) {
-      topPaginationBar.style.display = 'flex';
-      document.getElementById('topPageInfo').innerText = infoText;
-      document.getElementById('topPageNumberBadge').innerText = pageBadgeText;
-      document.getElementById('topPrevBtn').disabled = isPrevDisabled;
-      document.getElementById('topNextBtn').disabled = isNextDisabled;
-    }
-  } else if (totalResults > 0) {
-    paginationBar.style.display = 'flex';
-    document.getElementById('pageInfo').innerText = `${totalResults.toLocaleString()} records`;
-    document.getElementById('pageNumberBadge').innerText = `Page 1 of 1`;
-    document.getElementById('prevBtn').disabled = true;
-    document.getElementById('nextBtn').disabled = true;
-
-    if (topPaginationBar) {
-      topPaginationBar.style.display = 'flex';
-      document.getElementById('topPageInfo').innerText = `${totalResults.toLocaleString()} records`;
-      document.getElementById('topPageNumberBadge').innerText = `Page 1 of 1`;
-      document.getElementById('topPrevBtn').disabled = true;
-      document.getElementById('topNextBtn').disabled = true;
-    }
-  } else {
-    paginationBar.style.display = 'none';
-    if (topPaginationBar) topPaginationBar.style.display = 'none';
-  }
-
-  renderFilteredResults();
-}
-
-function formatFileSize(bytes) {
-  if (!bytes || bytes <= 0) return '';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function renderCards(rows) {
-  const container = document.getElementById('cardsContainer');
-  container.innerHTML = '';
-
-  if (!rows || rows.length === 0) {
-    container.innerHTML = `
-      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
-        No matching records found for "${escapeHtml(currentQuery)}".
-      </div>
-    `;
-    return;
-  }
-
-  const isGeneral = (currentSearchMode === 'general');
-
-  rows.forEach(r => {
-    const card = document.createElement('div');
-    card.className = 'result-card';
-    const escapedPath = (r.path || '').replace(/'/g, "\\'");
-    const escapedSheet = (r.sheet || '').replace(/'/g, "\\'");
-    const isImage = isImageFile(r.file);
-
-    let metaRowHtml = '';
-    if (isGeneral) {
-      const folderDisplay = r.folder ? escapeHtml(r.folder) : '';
-      const sizeDisplay = r.size ? formatFileSize(r.size) : '';
-      metaRowHtml = `
-        <div class="general-card-meta">
-          ${folderDisplay ? `<span class="meta-tag" title="${folderDisplay}">${SVG_RAW.folder} ${folderDisplay.length > 55 ? '...' + folderDisplay.slice(-52) : folderDisplay}</span>` : ''}
-          ${r.sheet ? `<span class="meta-tag">${SVG_RAW.context} ${escapeHtml(r.sheet)} (Row ${r.row})</span>` : ''}
-          ${sizeDisplay ? `<span class="meta-tag">💾 ${sizeDisplay}</span>` : ''}
-          ${r.indexed_at && r.indexed_at !== '—' ? `<span class="meta-tag">📅 ${escapeHtml(r.indexed_at)}</span>` : ''}
-        </div>
-      `;
-    } else {
-      let pillsHtml = '';
-      if (r.target && r.target !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.target}', 'Target Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.target, currentQuery)}</b></span>`;
-      }
-      if (r.other && r.other !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.other}', 'Party Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.other, currentQuery)}</b></span>`;
-      }
-      if (r.name && r.name !== '—') {
-        pillsHtml += `<span class="info-pill arabic" onclick="copyToClipboard('${r.name}', 'Name')">👤 <b>${highlightMatch(r.name, currentQuery)}</b></span>`;
-      }
-      if (r.time && r.time !== '—') {
-        pillsHtml += `<span class="info-pill">📅 ${escapeHtml(r.time)}</span>`;
-      }
-      if (r.dir && r.dir !== '—') {
-        pillsHtml += `<span class="info-pill">🔄 ${escapeHtml(r.dir)}</span>`;
-      }
-      if (r.address && r.address !== '—') {
-        pillsHtml += `<span class="info-pill arabic">📍 ${highlightMatch(r.address, currentQuery)}</span>`;
-      }
-      if (pillsHtml) {
-        metaRowHtml = `<div class="card-pill-group">${pillsHtml}</div>`;
-      }
-    }
-
-    card.innerHTML = `
-      <div class="card-header">
-        <div class="file-meta">
-          ${getFileExtBadge(r.file)}
-          <span title="${escapeHtml(r.path || '')}">${escapeHtml(r.file)}</span>
-        </div>
-        <div class="card-actions">
-          ${isImage ? `<button class="btn-image-preview" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Inspect Image & OCR Highlights">${SVG_RAW.eye} Preview & Text</button>` : ''}
-          <button class="btn-action" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="View ±3 lines context">
-            ${SVG_RAW.context} Context
-          </button>
-          <button class="btn-action" onclick="openBookmarkModal('${escapedPath}', '${escapedSheet}', ${r.row}, '${escapeHtml(r.name || r.other || r.target || '')}')" title="Tag record">
-            ${SVG_RAW.tag} Tag
-          </button>
-          <button class="btn-action" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">
-            ${SVG_RAW.open} Open
-          </button>
-          <button class="btn-action" onclick="revealFolder('${escapedPath}')" title="Open containing folder">
-            ${SVG_RAW.folder} Folder
-          </button>
-        </div>
-      </div>
-      ${metaRowHtml}
-      <div class="snippet-box" ${isImage ? `style="cursor:pointer;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')"` : ''}>
-        ${highlightMatch(r.snippet, currentQuery)}
-      </div>
-    `;
-    container.appendChild(card);
-  });
-}
-
-function renderTableRows(rows) {
-  const tbody = document.getElementById('tableBody');
-  const thead = document.getElementById('tableHead');
-  tbody.innerHTML = '';
-
-  const isGeneral = (currentSearchMode === 'general');
-
-  if (isGeneral) {
-    thead.innerHTML = `
-      <th>File</th>
-      <th>Folder / Section</th>
-      <th>Snippet / Matched Content</th>
-      <th>Indexed</th>
-      <th>Actions</th>
-    `;
-  } else {
-    thead.innerHTML = `
-      <th>File</th>
-      <th>Time</th>
-      <th>Dir</th>
-      <th>Target</th>
-      <th>Other Party</th>
-      <th>Name</th>
-      <th>Duration / Extra</th>
-      <th>Location / Cell</th>
-      <th>Action</th>
-    `;
-  }
-
-  if (!rows || rows.length === 0) {
-    const colspan = isGeneral ? 5 : 9;
-    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align:center; padding: 40px; color:#64748b;">No records match your query.</td></tr>`;
-    return;
-  }
-
-  rows.forEach(r => {
-    const tr = document.createElement('tr');
-    const escapedPath = (r.path || '').replace(/'/g, "\\'");
-    const escapedSheet = (r.sheet || '').replace(/'/g, "\\'");
-    const isImage = isImageFile(r.file);
-
-    if (isGeneral) {
-      const folderName = r.folder ? r.folder.split('/').slice(-2).join('/') : '';
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">
-          ${getFileExtBadge(r.file)}
-          <span style="margin-left:5px; font-weight:600;">${escapeHtml(r.file)}</span>
-        </td>
-        <td style="color:#94a3b8; font-size:0.8rem;" title="${escapeHtml(r.folder || '')}">
-          <div>📁 ${escapeHtml(folderName || 'Root')}</div>
-          ${r.sheet ? `<div style="color:var(--text-dim); font-size:0.75rem;">${escapeHtml(r.sheet)} (Row ${r.row})</div>` : ''}
-        </td>
-        <td style="max-width: 520px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; line-height:1.45;">
-          ${highlightMatch(r.snippet, currentQuery)}
-        </td>
-        <td style="white-space:nowrap; color:#94a3b8; font-size:0.78rem;">
-          ${escapeHtml(r.indexed_at || r.time || '—')}
-        </td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open File">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="revealFolder('${escapedPath}')" title="Folder">${SVG_RAW.folder}</button>
-          </div>
-        </td>
-      `;
-    } else {
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">${getFileExtBadge(r.file)} <span style="margin-left:4px;">${escapeHtml(r.file)}</span></td>
-        <td>${escapeHtml(r.time)}</td>
-        <td>${escapeHtml(r.dir)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.target}', 'Target Phone')">${highlightMatch(r.target, currentQuery)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.other}', 'Party Phone')">${highlightMatch(r.other, currentQuery)}</td>
-        <td class="arabic" style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.name}', 'Name')">${highlightMatch(r.name, currentQuery)}</td>
-        <td>${escapeHtml(r.duration)}</td>
-        <td class="arabic">${highlightMatch(r.address || r.sheet, currentQuery)}</td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
-          </div>
-        </td>
-      `;
-    }
-    tbody.appendChild(tr);
-  });
-}
-
-async function openFile(filePath, sheetName, rowIdx) {
-  showToast(`🚀 Opening ${filePath.split('/').pop()} at row ${rowIdx}...`);
-  try {
-    const res = await fetch(`/api/open?file=${encodeURIComponent(filePath)}&sheet=${encodeURIComponent(sheetName)}&row=${rowIdx}`);
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ ${data.message}`);
-    } else {
-      showToast(`❌ Error: ${data.error}`);
-    }
-  } catch (err) {
-    showToast(`❌ Network error launching app`);
-  }
-}
-
-async function revealFolder(filePath) {
-  showToast(`📂 Opening folder...`);
-  try {
-    const res = await fetch(`/api/reveal?file=${encodeURIComponent(filePath)}`);
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ ${data.message}`);
-    } else {
-      showToast(`❌ Error: ${data.error}`);
-    }
-  } catch (err) {
-    showToast(`❌ Network error opening folder`);
-  }
-}
-
-async function showContextWindow(filePath, sheetName, rowIdx) {
-  const modal = document.getElementById('contextModal');
-  const label = document.getElementById('contextFileLabel');
-  const box = document.getElementById('contextLinesBox');
-  label.innerText = `${filePath} (${sheetName}, around Row ${rowIdx})`;
-  box.innerHTML = 'Loading ±3 lines context...';
-  modal.classList.add('active');
-
-  try {
-    const res = await fetch(`/api/context?file=${encodeURIComponent(filePath)}&sheet=${encodeURIComponent(sheetName)}&row=${rowIdx}`);
-    const data = await res.json();
-    if (data.ok && data.lines && data.lines.length > 0) {
-      let html = '';
-      data.lines.forEach(l => {
-        const isTarget = (l.row === rowIdx);
-        html += `<div style="padding: 4px 8px; border-radius: 4px; ${isTarget ? 'background: rgba(56, 189, 248, 0.2); font-weight: bold; border-left: 3px solid var(--accent);' : ''}">
-          <span style="color:#64748b; margin-right: 8px;">[Row ${l.row}]</span>
-          ${highlightMatch(l.content, currentQuery)}
-        </div>`;
-      });
-      box.innerHTML = html;
-    } else {
-      box.innerHTML = '<span style="color:#64748b;">No surrounding context available.</span>';
-    }
-  } catch (err) {
-    box.innerHTML = '<span style="color:#ef4444;">Error loading context.</span>';
-  }
-}
-
-/* Image & Selectable OCR Text Inspector */
-let currentImageBoxes = [];
-let currentImageLines = [];
-let originalImgWidth = 0;
-let originalImgHeight = 0;
-let currentImageScale = 1.0;
-let showBoxesEnabled = true;
-
-function isImageFile(filename) {
-  if (!filename) return false;
-  const ext = filename.split('.').pop().toLowerCase();
-  return ['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext);
-}
-
-async function showImagePreview(filePath, sheetName, searchTerm) {
-  const modal = document.getElementById('imagePreviewModal');
-  const img = document.getElementById('imagePreviewElement');
-  const overlay = document.getElementById('ocrBoxesOverlay');
-  const label = document.getElementById('imagePreviewFileLabel');
-  const notice = document.getElementById('imageOcrNotice');
-  const details = document.getElementById('ocrStatusDetails');
-  const textContainer = document.getElementById('ocrTextContainer');
-
-  currentImageScale = 1.0;
-  const container = document.getElementById('ocrPreviewContainer');
-  if (container) container.style.transform = 'scale(1)';
-  overlay.innerHTML = '';
-  currentImageBoxes = [];
-  currentImageLines = [];
-  originalImgWidth = 0;
-  originalImgHeight = 0;
-
-  label.innerText = `${filePath} (${sheetName || 'Image'})`;
-  notice.style.display = 'none';
-  details.innerText = 'Analyzing image & loading OCR text layer...';
-  textContainer.innerHTML = '<div style="color:#64748b; padding:24px; text-align:center;">Detecting text & coordinates...</div>';
-  modal.classList.add('active');
-
-  const encodedFile = encodeURIComponent(filePath);
-  const encodedSheet = encodeURIComponent(sheetName || 'Image');
-
-  const updateBoxesAndText = () => {
-    if (!originalImgWidth || !originalImgHeight) {
-      originalImgWidth = img.naturalWidth || 800;
-      originalImgHeight = img.naturalHeight || 600;
-    }
-    renderOcrBoxes(searchTerm || currentQuery);
-    renderOcrTextInspector(searchTerm || currentQuery);
-    details.innerText = `${originalImgWidth} × ${originalImgHeight} px | ${currentImageBoxes.length} detected words`;
-  };
-
-  // Set img load handler FIRST before src
-  img.onload = () => {
-    updateBoxesAndText();
-  };
-
-  img.onerror = () => {
-    details.innerText = '❌ Failed to load image file.';
-    textContainer.innerHTML = '<div style="color:#ef4444; padding:20px;">Failed to load image file.</div>';
-  };
-
-  img.src = `/api/image/view?file=${encodedFile}`;
-
-  // Fetch bounding boxes & lines
-  try {
-    const res = await fetch(`/api/image/boxes?file=${encodedFile}&sheet=${encodedSheet}`);
-    const resData = await res.json();
-    if (resData.ok && resData.data) {
-      originalImgWidth = resData.data.width || img.naturalWidth || 0;
-      originalImgHeight = resData.data.height || img.naturalHeight || 0;
-      currentImageBoxes = resData.data.boxes || [];
-      currentImageLines = resData.data.lines || [];
-      updateBoxesAndText();
-    }
-  } catch (err) {
-    console.error("Failed to fetch OCR boxes:", err);
-  }
-
-  if (img.complete && img.naturalWidth > 0) {
-    updateBoxesAndText();
-  }
-}
-
-function renderOcrTextInspector(searchTerm) {
-  const container = document.getElementById('ocrTextContainer');
-  const wordsBadge = document.getElementById('ocrWordsCountBadge');
-  const cleanTerm = (searchTerm || '').trim().toLowerCase();
-
-  let textLines = currentImageLines || [];
-  if ((!textLines || textLines.length === 0) && currentImageBoxes && currentImageBoxes.length > 0) {
-    textLines = [currentImageBoxes.map(b => b.text).join(' ')];
-  }
-
-  if (!textLines || textLines.length === 0) {
-    container.innerHTML = '<div style="color:#64748b; padding:20px; text-align:center;">No OCR text detected in this image.</div>';
-    if (wordsBadge) wordsBadge.innerText = '0 words';
-    return;
-  }
-
-  const fullRawText = textLines.join('\n');
-  const totalWords = fullRawText.split(/\s+/).filter(Boolean).length;
-  if (wordsBadge) wordsBadge.innerText = `${totalWords} words`;
-
-  let html = '';
-  textLines.forEach((line, idx) => {
-    const escaped = escapeHtml(line);
-    let highlighted = escaped;
-    if (cleanTerm) {
-      const regex = new RegExp(`(${cleanTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-      highlighted = escaped.replace(regex, '<mark class="ocr-mark">$1</mark>');
-    }
-    html += `<div class="ocr-line" onclick="copyToClipboard('${line.replace(/'/g, "\\'")}', 'Line ${idx + 1}')"><span class="ocr-line-num">${idx + 1}</span><span class="ocr-line-content">${highlighted}</span></div>`;
-  });
-
-  container.innerHTML = html;
-}
-
-function copyAllOcrText() {
-  let text = '';
-  if (currentImageLines && currentImageLines.length > 0) {
-    text = currentImageLines.join('\n');
-  } else if (currentImageBoxes && currentImageBoxes.length > 0) {
-    text = currentImageBoxes.map(b => b.text).join(' ');
-  }
-  if (!text) {
-    showToast("No text to copy");
-    return;
-  }
-  copyToClipboard(text, 'Full OCR Text');
-}
-
-function copySelectedOcrText() {
-  const selection = window.getSelection().toString();
-  if (selection && selection.trim()) {
-    copyToClipboard(selection.trim(), 'Selected Text');
-  } else {
-    showToast("Highlight text with mouse first to copy selection");
-  }
-}
-
-function renderOcrBoxes(searchTerm) {
-  const overlay = document.getElementById('ocrBoxesOverlay');
-  overlay.innerHTML = '';
-  if (!showBoxesEnabled || !currentImageBoxes || currentImageBoxes.length === 0) {
-    return;
-  }
-
-  const imgW = originalImgWidth || document.getElementById('imagePreviewElement').naturalWidth || 800;
-  const imgH = originalImgHeight || document.getElementById('imagePreviewElement').naturalHeight || 600;
-
-  const cleanTerm = (searchTerm || '').trim().toLowerCase();
-  let matchCount = 0;
-  let firstMatchEl = null;
-
-  currentImageBoxes.forEach(b => {
-    const word = (b.text || '').trim();
-    if (!word) return;
-
-    const leftPct = (b.left / imgW) * 100;
-    const topPct = (b.top / imgH) * 100;
-    const widthPct = (b.width / imgW) * 100;
-    const heightPct = (b.height / imgH) * 100;
-
-    const isMatch = cleanTerm && (
-      word.toLowerCase().includes(cleanTerm) ||
-      cleanTerm.includes(word.toLowerCase())
-    );
-    if (isMatch) matchCount++;
-
-    const boxEl = document.createElement('div');
-    boxEl.className = 'ocr-highlight-box' + (isMatch ? ' active-match' : '');
-    boxEl.style.left = `${leftPct}%`;
-    boxEl.style.top = `${topPct}%`;
-    boxEl.style.width = `${widthPct}%`;
-    boxEl.style.height = `${heightPct}%`;
-    boxEl.title = `"${word}" (${Math.round(b.conf || 0)}% conf)\nClick to copy`;
-
-    // Transparent live text layer for mouse dragging selection directly over the image!
-    const textSpan = document.createElement('span');
-    textSpan.className = 'ocr-live-text';
-    textSpan.innerText = word;
-    boxEl.appendChild(textSpan);
-
-    boxEl.onclick = (e) => {
-      e.stopPropagation();
-      copyToClipboard(word, 'OCR Word');
-    };
-
-    overlay.appendChild(boxEl);
-
-    if (isMatch && !firstMatchEl) {
-      firstMatchEl = boxEl;
-    }
-  });
-
-  const notice = document.getElementById('imageOcrNotice');
-  if (cleanTerm) {
-    notice.style.display = 'block';
-    if (matchCount > 0) {
-      notice.innerHTML = `🎯 Highlighted <b>${matchCount}</b> match(es) for "<b>${escapeHtml(cleanTerm)}</b>" on image & text inspector. Drag mouse across words to select & copy.`;
-      if (firstMatchEl) {
-        setTimeout(() => {
-          firstMatchEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 150);
-      }
-    } else {
-      notice.innerHTML = `ℹ️ Showing all ${currentImageBoxes.length} detected words on image.`;
-    }
-  } else {
-    notice.style.display = 'none';
-  }
-}
-
-function toggleOcrBoxes() {
-  showBoxesEnabled = !showBoxesEnabled;
-  const btn = document.getElementById('ocrToggleBtn');
-  btn.innerHTML = `<span class="icon-cyan">${SVG_RAW.eye}</span> Boxes: ${showBoxesEnabled ? 'ON' : 'OFF'}`;
-  const overlay = document.getElementById('ocrBoxesOverlay');
-  overlay.style.display = showBoxesEnabled ? 'block' : 'none';
-}
-
-function zoomImage(delta) {
-  currentImageScale = Math.max(0.4, Math.min(3.0, currentImageScale + delta));
-  const container = document.getElementById('ocrPreviewContainer');
-  container.style.transform = `scale(${currentImageScale})`;
-  container.style.transformOrigin = 'top center';
-}
-
-function resetImageZoom() {
-  currentImageScale = 1.0;
-  const container = document.getElementById('ocrPreviewContainer');
-  container.style.transform = 'scale(1)';
-}
-
-function closeImagePreview() {
-  document.getElementById('imagePreviewModal').classList.remove('active');
-  document.getElementById('imagePreviewElement').src = '';
-  document.getElementById('ocrBoxesOverlay').innerHTML = '';
-}
-
-async function triggerBackup() {
-  showToast("💾 Creating snapshot backup...");
-  try {
-    const res = await fetch('/api/backup');
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ ${data.message}`);
-    } else {
-      showToast(`❌ Backup failed`);
-    }
-  } catch (err) {
-    showToast(`❌ Network error creating backup`);
-  }
-}
-
-/* Tab Switcher */
-let currentMainTab = 'global';
-
-function switchMainTab(tab) {
-  currentMainTab = tab;
-  document.getElementById('tabBtnGlobal').classList.toggle('active', tab === 'global');
-  document.getElementById('tabBtnScoped').classList.toggle('active', tab === 'scoped');
-  document.getElementById('tabGlobalPane').style.display = (tab === 'global') ? 'block' : 'none';
-  document.getElementById('tabScopedPane').style.display = (tab === 'scoped') ? 'block' : 'none';
-
-  if (tab === 'global') {
-    document.getElementById('queryInput').focus();
-  } else {
-    document.getElementById('scopedQueryInput').focus();
-  }
-}
-
-/* Scoped Target / Restricted Search Logic with Native Folder Picker */
-let scopedState = {
-  active: false,
-  type: null,
-  path: null,
-  filename: null,
-  mode: 'general',
-  currentPage: 0,
-  pageSize: 50,
-  currentQuery: '',
-  totalResults: 0,
-  lastResults: [],
-  viewMode: 'card',
-  debounceTimer: null
-};
-
-function setScopedSearchMode(mode) {
-  scopedState.mode = mode;
-  const isGeneral = (mode === 'general');
-  document.getElementById('scopedModeBtnGeneral').classList.toggle('active', isGeneral);
-  document.getElementById('scopedModeBtnTelecom').classList.toggle('active', !isGeneral);
-
-  const desc = document.getElementById('scopedModeDescText');
-  const input = document.getElementById('scopedQueryInput');
-  if (isGeneral) {
-    desc.innerText = 'Target document lookup';
-    input.placeholder = 'Search keywords, document text, topics, Egyptian/EN names, OCR images...';
-  } else {
-    desc.innerText = 'Target CDR & phone records';
-    input.placeholder = 'Search phone numbers, caller/callee, duration, cell towers...';
-  }
-
-  if (scopedState.active && scopedState.currentQuery) {
-    doScopedSearch(0);
-  }
-}
-
-function switchScopedView(mode) {
-  scopedState.viewMode = mode;
-  document.getElementById('btnScopedViewCard').classList.toggle('active', mode === 'card');
-  document.getElementById('btnScopedViewTable').classList.toggle('active', mode === 'table');
-  document.getElementById('scopedCardsContainer').style.display = (mode === 'card') ? 'flex' : 'none';
-  document.getElementById('scopedTableContainer').style.display = (mode === 'table') ? 'block' : 'none';
-  if (scopedState.lastResults && scopedState.lastResults.length > 0) {
-    renderScopedViewData({ rows: scopedState.lastResults, total: scopedState.totalResults, type: scopedState.lastResults[0]?.phone ? 'prefix' : 'cdr' });
-  }
-}
-
-function handleScopedInput(e) {
-  const val = e.target.value.trim();
-  document.getElementById('clearScopedSearchBtn').style.display = val ? 'block' : 'none';
-  if (scopedState.debounceTimer) clearTimeout(scopedState.debounceTimer);
-  scopedState.debounceTimer = setTimeout(() => {
-    if (val.length >= 2 || val.length === 0) {
-      doScopedSearch(0);
-    }
-  }, 350);
-}
-
-function clearScopedSearch() {
-  document.getElementById('scopedQueryInput').value = '';
-  document.getElementById('clearScopedSearchBtn').style.display = 'none';
-  document.getElementById('scopedQueryInput').focus();
-  doScopedSearch(0);
-}
-
-function setScopedTarget(type, path, label) {
-  scopedState.active = true;
-  scopedState.type = type;
-  scopedState.path = path;
-  scopedState.filename = label || path.split('/').pop();
-
-  const banner = document.getElementById('activeScopeBanner');
-  banner.style.display = 'flex';
-  document.getElementById('activeScopeLabel').innerText = `${type.toUpperCase()}: ${path}`;
-  document.getElementById('scopedTargetBadge').innerText = scopedState.filename;
-  document.getElementById('scopedTargetBadge').style.background = '#10b98130';
-  document.getElementById('scopedTargetBadge').style.color = '#10b981';
-
-  document.getElementById('scopedQueryInput').focus();
-  if (document.getElementById('scopedQueryInput').value.trim()) {
-    doScopedSearch(0);
-  } else {
-    document.getElementById('scopedResultsCount').innerText = `Target locked: ${scopedState.filename}. Ready.`;
-  }
-}
-
-function clearScopedTarget() {
-  scopedState.active = false;
-  scopedState.type = null;
-  scopedState.path = null;
-  scopedState.filename = null;
-  scopedState.lastResults = [];
-  scopedState.totalResults = 0;
-
-  document.getElementById('activeScopeBanner').style.display = 'none';
-  document.getElementById('scopedTargetBadge').innerText = 'Folder or File';
-  document.getElementById('scopedTargetBadge').style.background = '#0ea5e920';
-  document.getElementById('scopedTargetBadge').style.color = '#38bdf8';
-  document.getElementById('scopedFileInput').value = '';
-  document.getElementById('scopedResultsCount').innerText = 'Choose a folder or drop a file above to begin.';
-  document.getElementById('scopedTiming').innerText = '0ms';
-  renderScopedCards([]);
-  renderScopedTableRows([]);
-}
-
-async function pickFolderNative() {
-  showToast("📁 Opening folder selector...");
-  try {
-    const res = await fetch('/api/dialog/pick-folder');
-    const data = await res.json();
-    if (data.ok && data.path) {
-      await executeTargetIndex(data.path);
-    }
-  } catch (err) {
-    showToast("❌ Could not open native folder chooser");
-  }
-}
-
-async function pickFileNative() {
-  showToast("📄 Opening file selector...");
-  try {
-    const res = await fetch('/api/dialog/pick-file');
-    const data = await res.json();
-    if (data.ok && data.path) {
-      await executeTargetIndex(data.path);
-    }
-  } catch (err) {
-    showToast("❌ Could not open native file chooser");
-  }
-}
-
-function handleWebkitFolderSelect(e) {
-  const files = e.target.files;
-  if (files && files.length > 0) {
-    const firstFile = files[0];
-    const path = firstFile.webkitRelativePath ? firstFile.webkitRelativePath.split('/')[0] : firstFile.name;
-    showToast(`Selected folder: ${path}`);
-    setScopedTarget('folder', path, path);
-  }
-}
-
-async function executeTargetIndex(targetPath) {
-  showToast(`⚡ Indexing target: ${targetPath.split('/').pop()}...`);
-  try {
-    const res = await fetch('/api/target/index', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: targetPath })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ ${data.message}`);
-      setScopedTarget(data.is_dir ? 'folder' : 'file', data.target, targetPath.split('/').pop());
-      refreshStats();
-      if (isImageFile(data.target)) {
-        showImagePreview(data.target, 'Image', '');
-      }
-    } else {
-      alert(`❌ Error: ${data.error}`);
-    }
-  } catch (err) {
-    showToast("❌ Network error indexing target");
-  }
-}
-
-async function handleScopedFileUpload(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  await uploadScopedFile(file);
-}
-
-async function uploadScopedFile(file) {
-  showToast(`📤 Uploading and parsing ${file.name}...`);
-  const formData = new FormData();
-  formData.append('file', file, file.name);
-
-  try {
-    const res = await fetch('/api/target/upload', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`✅ Successfully uploaded and indexed ${data.filename}!`);
-      setScopedTarget('file', data.path, data.filename);
-      refreshStats();
-      if (isImageFile(data.filename)) {
-        showImagePreview(data.path, 'Image', '');
-      }
-    } else {
-      alert(`❌ Upload failed: ${data.error}`);
-    }
-  } catch (err) {
-    showToast("❌ Network error uploading file");
-  }
-}
-
-function initDragAndDrop() {
-  const dropZone = document.getElementById('scopedDropZone');
-  if (!dropZone) return;
-
-  ['dragenter', 'dragover'].forEach(name => {
-    dropZone.addEventListener(name, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.add('dragover');
-    }, false);
-  });
-
-  ['dragleave', 'drop'].forEach(name => {
-    dropZone.addEventListener(name, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove('dragover');
-    }, false);
-  });
-
-  dropZone.addEventListener('drop', (e) => {
-    const dt = e.dataTransfer;
-    const files = dt.files;
-    if (files && files.length > 0) {
-      uploadScopedFile(files[0]);
-    }
-  }, false);
-}
-
-async function doScopedSearch(page = 0) {
-  if (!scopedState.active || !scopedState.path) {
-    alert("Please choose a target folder or drop a file first!");
-    return;
-  }
-  const q = document.getElementById('scopedQueryInput').value.trim();
-  if (!q) {
-    scopedState.lastResults = [];
-    scopedState.totalResults = 0;
-    renderScopedViewData({ rows: [], total: 0 });
-    document.getElementById('scopedResultsCount').innerText = `Target locked: ${scopedState.filename}. Ready.`;
-    document.getElementById('scopedTiming').innerText = "0ms";
-    return;
-  }
-
-  scopedState.currentPage = page;
-  scopedState.currentQuery = q;
-  const offset = scopedState.currentPage * scopedState.pageSize;
-
-  const t0 = performance.now();
-  document.getElementById('scopedResultsCount').innerText = "Searching target...";
-
-  try {
-    const params = new URLSearchParams({
-      q: scopedState.currentQuery,
-      limit: scopedState.pageSize,
-      offset: offset,
-      mode: scopedState.mode || 'general'
-    });
-    if (scopedState.type === 'file') {
-      params.append('file', scopedState.path);
-    } else if (scopedState.type === 'folder') {
-      params.append('folder', scopedState.path);
-    }
-
-    const res = await fetch(`/api/search?${params.toString()}`);
-    const data = await res.json();
-    const t1 = performance.now();
-    document.getElementById('scopedTiming').innerText = `${Math.round(t1 - t0)}ms`;
-
-    renderScopedViewData(data);
-  } catch (e) {
-    console.error(e);
-    document.getElementById('scopedResultsCount').innerText = "Scoped search error";
-  }
-}
-
-function changeScopedPage(delta) {
-  const newPage = scopedState.currentPage + delta;
-  if (newPage >= 0 && (newPage * scopedState.pageSize) < scopedState.totalResults) {
-    doScopedSearch(newPage);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-}
-
-function renderScopedViewData(data) {
-  scopedState.lastResults = data.rows || [];
-  scopedState.totalResults = data.total || 0;
-  const paginationBar = document.getElementById('scopedPaginationBar');
-  const topPaginationBar = document.getElementById('scopedTopPaginationBar');
-
-  if (scopedState.totalResults > scopedState.pageSize) {
-    const start = scopedState.currentPage * scopedState.pageSize + 1;
-    const end = Math.min((scopedState.currentPage + 1) * scopedState.pageSize, scopedState.totalResults);
-    const infoText = `Showing ${start.toLocaleString()}-${end.toLocaleString()} of ${scopedState.totalResults.toLocaleString()} records`;
-    const pageBadgeText = `Page ${scopedState.currentPage + 1} of ${Math.ceil(scopedState.totalResults / scopedState.pageSize)}`;
-    const isPrevDisabled = (scopedState.currentPage === 0);
-    const isNextDisabled = ((scopedState.currentPage + 1) * scopedState.pageSize >= scopedState.totalResults);
-
-    paginationBar.style.display = 'flex';
-    document.getElementById('scopedPageInfo').innerText = infoText;
-    document.getElementById('scopedPageNumberBadge').innerText = pageBadgeText;
-    document.getElementById('scopedPrevBtn').disabled = isPrevDisabled;
-    document.getElementById('scopedNextBtn').disabled = isNextDisabled;
-
-    if (topPaginationBar) {
-      topPaginationBar.style.display = 'flex';
-      document.getElementById('scopedTopPageInfo').innerText = infoText;
-      document.getElementById('scopedTopPageNumberBadge').innerText = pageBadgeText;
-      document.getElementById('scopedTopPrevBtn').disabled = isPrevDisabled;
-      document.getElementById('scopedTopNextBtn').disabled = isNextDisabled;
-    }
-  } else if (scopedState.totalResults > 0) {
-    paginationBar.style.display = 'flex';
-    document.getElementById('scopedPageInfo').innerText = `${scopedState.totalResults.toLocaleString()} records`;
-    document.getElementById('scopedPageNumberBadge').innerText = `Page 1 of 1`;
-    document.getElementById('scopedPrevBtn').disabled = true;
-    document.getElementById('scopedNextBtn').disabled = true;
-
-    if (topPaginationBar) {
-      topPaginationBar.style.display = 'flex';
-      document.getElementById('scopedTopPageInfo').innerText = `${scopedState.totalResults.toLocaleString()} records`;
-      document.getElementById('scopedTopPageNumberBadge').innerText = `Page 1 of 1`;
-      document.getElementById('scopedTopPrevBtn').disabled = true;
-      document.getElementById('scopedTopNextBtn').disabled = true;
-    }
-  } else {
-    paginationBar.style.display = 'none';
-    if (topPaginationBar) topPaginationBar.style.display = 'none';
-  }
-
-  document.getElementById('scopedResultsCount').innerText = `${scopedState.totalResults.toLocaleString()} matches in ${scopedState.filename}`;
-  renderScopedCards(scopedState.lastResults);
-  renderScopedTableRows(scopedState.lastResults);
-
-  if (scopedState.lastResults.length > 0 && isImageFile(scopedState.lastResults[0].file)) {
-    const firstImg = scopedState.lastResults[0];
-    showImagePreview(firstImg.path, firstImg.sheet, scopedState.currentQuery);
-  }
-}
-
-function renderScopedCards(rows) {
-  const container = document.getElementById('scopedCardsContainer');
-  container.innerHTML = '';
-
-  if (!rows || rows.length === 0) {
-    container.innerHTML = `
-      <div style="text-align:center; padding: 48px; color:#64748b; background: var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
-        ${scopedState.active ? `No records found in "${scopedState.filename}" for "${escapeHtml(scopedState.currentQuery)}".` : 'No target selected yet. Choose a folder or file above.'}
-      </div>
-    `;
-    return;
-  }
-
-  const isGeneral = ((scopedState.mode || 'general') === 'general');
-
-  rows.forEach(r => {
-    const card = document.createElement('div');
-    card.className = 'result-card';
-    const escapedPath = (r.path || '').replace(/'/g, "\\'");
-    const escapedSheet = (r.sheet || '').replace(/'/g, "\\'");
-    const isImage = isImageFile(r.file);
-
-    let metaRowHtml = '';
-    if (isGeneral) {
-      const folderDisplay = r.folder ? escapeHtml(r.folder) : '';
-      const sizeDisplay = r.size ? formatFileSize(r.size) : '';
-      metaRowHtml = `
-        <div class="general-card-meta">
-          ${folderDisplay ? `<span class="meta-tag" title="${folderDisplay}">${SVG_RAW.folder} ${folderDisplay.length > 55 ? '...' + folderDisplay.slice(-52) : folderDisplay}</span>` : ''}
-          ${r.sheet ? `<span class="meta-tag">${SVG_RAW.context} ${escapeHtml(r.sheet)} (Row ${r.row})</span>` : ''}
-          ${sizeDisplay ? `<span class="meta-tag">💾 ${sizeDisplay}</span>` : ''}
-          ${r.indexed_at && r.indexed_at !== '—' ? `<span class="meta-tag">📅 ${escapeHtml(r.indexed_at)}</span>` : ''}
-        </div>
-      `;
-    } else {
-      let pillsHtml = '';
-      if (r.target && r.target !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.target}', 'Target Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.target, scopedState.currentQuery)}</b></span>`;
-      }
-      if (r.other && r.other !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.other}', 'Party Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.other, scopedState.currentQuery)}</b></span>`;
-      }
-      if (r.name && r.name !== '—') {
-        pillsHtml += `<span class="info-pill arabic" onclick="copyToClipboard('${r.name}', 'Name')">👤 <b>${highlightMatch(r.name, scopedState.currentQuery)}</b></span>`;
-      }
-      if (r.time && r.time !== '—') {
-        pillsHtml += `<span class="info-pill">📅 ${escapeHtml(r.time)}</span>`;
-      }
-      if (pillsHtml) {
-        metaRowHtml = `<div class="card-pill-group">${pillsHtml}</div>`;
-      }
-    }
-
-    card.innerHTML = `
-      <div class="card-header">
-        <div class="file-meta">
-          ${getFileExtBadge(r.file)}
-          <span title="${escapeHtml(r.path || '')}">${escapeHtml(r.file)}</span>
-        </div>
-        <div class="card-actions">
-          ${isImage ? `<button class="btn-image-preview" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(scopedState.currentQuery || '')}')">${SVG_RAW.eye} Preview & Text</button>` : ''}
-          <button class="btn-action" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})">
-            ${SVG_RAW.context} Context
-          </button>
-          <button class="btn-action" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">
-            ${SVG_RAW.open} Open
-          </button>
-          <button class="btn-action" onclick="revealFolder('${escapedPath}')">
-            ${SVG_RAW.folder} Folder
-          </button>
-        </div>
-      </div>
-      ${metaRowHtml}
-      <div class="snippet-box" ${isImage ? `style="cursor:pointer;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(scopedState.currentQuery || '')}')"` : ''}>
-        ${highlightMatch(r.snippet, scopedState.currentQuery)}
-      </div>
-    `;
-    container.appendChild(card);
-  });
-}
-
-function renderScopedTableRows(rows) {
-  const tbody = document.getElementById('scopedTableBody');
-  const thead = document.getElementById('scopedTableHead');
-  tbody.innerHTML = '';
-
-  const isGeneral = ((scopedState.mode || 'general') === 'general');
-
-  if (isGeneral) {
-    thead.innerHTML = `
-      <th>File</th>
-      <th>Folder / Section</th>
-      <th>Snippet / Matched Content</th>
-      <th>Indexed</th>
-      <th>Actions</th>
-    `;
-  } else {
-    thead.innerHTML = `
-      <th>File</th>
-      <th>Time</th>
-      <th>Dir</th>
-      <th>Target</th>
-      <th>Other Party</th>
-      <th>Name</th>
-      <th>Duration / Extra</th>
-      <th>Location / Cell</th>
-      <th>Action</th>
-    `;
-  }
-
-  if (!rows || rows.length === 0) {
-    const colspan = isGeneral ? 5 : 9;
-    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align:center; padding: 40px; color:#64748b;">No records match your target search.</td></tr>`;
-    return;
-  }
-
-  rows.forEach(r => {
-    const tr = document.createElement('tr');
-    const escapedPath = (r.path || '').replace(/'/g, "\\'");
-    const escapedSheet = (r.sheet || '').replace(/'/g, "\\'");
-    const isImage = isImageFile(r.file);
-
-    if (isGeneral) {
-      const folderName = r.folder ? r.folder.split('/').slice(-2).join('/') : '';
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">
-          ${getFileExtBadge(r.file)}
-          <span style="margin-left:5px; font-weight:600;">${escapeHtml(r.file)}</span>
-        </td>
-        <td style="color:#94a3b8; font-size:0.8rem;" title="${escapeHtml(r.folder || '')}">
-          <div>📁 ${escapeHtml(folderName || 'Root')}</div>
-          ${r.sheet ? `<div style="color:var(--text-dim); font-size:0.75rem;">${escapeHtml(r.sheet)} (Row ${r.row})</div>` : ''}
-        </td>
-        <td style="max-width: 520px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; line-height:1.45;">
-          ${highlightMatch(r.snippet, scopedState.currentQuery)}
-        </td>
-        <td style="white-space:nowrap; color:#94a3b8; font-size:0.78rem;">
-          ${escapeHtml(r.indexed_at || r.time || '—')}
-        </td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(scopedState.currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open File">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="revealFolder('${escapedPath}')" title="Folder">${SVG_RAW.folder}</button>
-          </div>
-        </td>
-      `;
-    } else {
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">${getFileExtBadge(r.file)} <span style="margin-left:4px;">${escapeHtml(r.file)}</span></td>
-        <td>${escapeHtml(r.time)}</td>
-        <td>${escapeHtml(r.dir)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.target}', 'Target Phone')">${highlightMatch(r.target, scopedState.currentQuery)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.other}', 'Party Phone')">${highlightMatch(r.other, scopedState.currentQuery)}</td>
-        <td class="arabic" style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.name}', 'Name')">${highlightMatch(r.name, scopedState.currentQuery)}</td>
-        <td>${escapeHtml(r.duration)}</td>
-        <td class="arabic">${highlightMatch(r.address || r.sheet, scopedState.currentQuery)}</td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(scopedState.currentQuery || '')}')">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})">${SVG_RAW.context}</button>
-          </div>
-        </td>
-      `;
-    }
-    tbody.appendChild(tr);
-  });
-}
-
-function exportIndex() {
-  window.location.href = '/api/index/export';
-}
-
-function exportCSV() {
-  if (!currentQuery) {
-    alert("Please enter a search query before exporting CSV!");
-    return;
-  }
-  window.location.href = `/api/search/csv?q=${encodeURIComponent(currentQuery)}`;
-}
-
-async function handleImportFile(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (!confirm(`Are you sure you want to restore/import "${file.name}"? Existing index will be backed up.`)) {
-    return;
-  }
-  showToast("📥 Uploading and verifying database...");
-  const formData = new FormData();
-  formData.append('dbfile', file, file.name);
-
-  try {
-    const res = await fetch('/api/index/import', { method: 'POST', body: formData });
-    const data = await res.json();
-    if (data.ok) {
-      showToast("✅ Database restored! Reloading stats...");
-      refreshStats();
-      doSearch(0);
-    } else {
-      alert(`❌ Import error: ${data.error}`);
-    }
-  } catch (err) {
-    showToast("❌ Network error importing database");
-  }
-}
-
-window.onload = () => {
-  injectStaticIcons();
-  refreshStats();
-  refreshWatcherStatus();
-  loadQuickFilters();
-  refreshBookmarkCount();
-  initDragAndDrop();
-};
-</script>
-</body>
-</html>
-"""
+        time.sleep(poll_interval)
+
+def get_html_template():
+    tpl_path = os.path.join(BASE_DIR, "templates", "index.html")
+    with open(tpl_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -4581,7 +1637,32 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+            self.wfile.write(get_html_template().encode("utf-8"))
+        elif parsed.path.startswith("/static/"):
+            rel_path = parsed.path[len("/static/"):].lstrip("/")
+            static_dir = os.path.join(BASE_DIR, "static")
+            safe_path = os.path.normpath(os.path.join(static_dir, rel_path))
+            if os.path.commonpath([static_dir, safe_path]) == static_dir and os.path.exists(safe_path) and os.path.isfile(safe_path):
+                mime = "text/plain"
+                if safe_path.endswith(".css"):
+                    mime = "text/css; charset=utf-8"
+                elif safe_path.endswith(".js"):
+                    mime = "application/javascript; charset=utf-8"
+                elif safe_path.endswith(".svg"):
+                    mime = "image/svg+xml"
+                elif safe_path.endswith(".png"):
+                    mime = "image/png"
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(os.path.getsize(safe_path)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                with open(safe_path, "rb") as sf:
+                    shutil.copyfileobj(sf, self.wfile)
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Static asset not found")
         elif parsed.path == "/api/stats":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -4592,11 +1673,24 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(WATCHER_CONFIG).encode("utf-8"))
-        elif parsed.path == "/api/index/status":
+        elif parsed.path == "/api/index/status" or parsed.path == "/api/progress":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(INDEX_STATE).encode("utf-8"))
+            resp = dict(INDEX_STATE)
+            resp["in_progress"] = INDEX_STATE.get("running", False)
+            resp["status"] = INDEX_STATE.get("status_message", "")
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+        elif parsed.path == "/api/notifications":
+            qs = urllib.parse.parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["50"])[0]) if qs.get("limit", [""])[0].isdigit() else 50
+            offset = int(qs.get("offset", ["0"])[0]) if qs.get("offset", [""])[0].isdigit() else 0
+            unread_only = qs.get("unread", ["0"])[0] in ("1", "true")
+            res_data = get_change_events(limit=limit, offset=offset, unread_only=unread_only)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(res_data).encode("utf-8"))
         elif parsed.path == "/api/index/export":
             if not os.path.exists(DB_PATH):
                 self.send_response(404)
@@ -4756,13 +1850,254 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
+        elif parsed.path == "/api/databases":
+            # List all configured databases with live file size & records count
+            storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
+            active_key = APP_CONFIG.get("active_db", "default")
+            db_list = []
+            for db_key, meta in APP_CONFIG.get("databases", {}).items():
+                fname = meta.get("filename", "sheets_index.db")
+                fpath = os.path.join(storage_dir, fname)
+                fsize = 0
+                records = 0
+                files_count = 0
+                exists = os.path.exists(fpath)
+                if exists:
+                    try:
+                        fsize = os.path.getsize(fpath)
+                        conn_chk = sqlite3.connect(fpath)
+                        cur_chk = conn_chk.cursor()
+                        cur_chk.execute("SELECT COUNT(*) FROM files;")
+                        files_count = cur_chk.fetchone()[0]
+                        cur_chk.execute("SELECT COUNT(*) FROM cdr_records;")
+                        records = cur_chk.fetchone()[0]
+                        conn_chk.close()
+                    except Exception:
+                        pass
+                db_list.append({
+                    "id": db_key,
+                    "nickname": meta.get("nickname") or db_key,
+                    "filename": fname,
+                    "path": fpath,
+                    "exists": exists,
+                    "size": fsize,
+                    "files_count": files_count,
+                    "records_count": records,
+                    "watch_folder": meta.get("watch_folder", ""),
+                    "watch_active": meta.get("watch_active", False),
+                    "created_at": meta.get("created_at", ""),
+                    "is_active": (db_key == active_key)
+                })
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "ok": True,
+                "databases": db_list,
+                "active_db": active_key,
+                "db_storage_dir": storage_dir
+            }).encode("utf-8"))
+        elif parsed.path == "/api/settings":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "ok": True,
+                "db_storage_dir": APP_CONFIG.get("db_storage_dir", BASE_DIR),
+                "watcher_settings": APP_CONFIG.get("watcher_settings", {}),
+                "active_db": APP_CONFIG.get("active_db", "default")
+            }).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/bookmarks/add":
+        if parsed.path == "/api/databases/switch":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                target_id = data.get("id", "").strip()
+                if not target_id or target_id not in APP_CONFIG.get("databases", {}):
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": f"Database '{target_id}' not found"}).encode("utf-8"))
+                    return
+                with INDEX_LOCK:
+                    if INDEX_STATE["running"]:
+                        self.send_response(400)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"ok": False, "error": "Cannot switch database while indexing is in progress!"}).encode("utf-8"))
+                        return
+                    APP_CONFIG["active_db"] = target_id
+                    sync_active_db_vars()
+                    save_config()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "ok": True,
+                    "active_db": target_id,
+                    "message": f"Switched to {APP_CONFIG['databases'][target_id].get('nickname')}"
+                }).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/databases/rename":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                target_id = data.get("id", "").strip()
+                new_nick = data.get("nickname", "").strip()
+                if not target_id or target_id not in APP_CONFIG.get("databases", {}):
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "Database not found"}).encode("utf-8"))
+                    return
+                if not new_nick:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "Nickname cannot be empty"}).encode("utf-8"))
+                    return
+                APP_CONFIG["databases"][target_id]["nickname"] = new_nick
+                save_config()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "message": "Nickname updated"}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/databases/create":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                nickname = data.get("nickname", "").strip() or "New Database"
+                folder = data.get("folder", "").strip()
+                # Generate unique ID and filename
+                db_id = re.sub(r'[^a-zA-Z0-9_]', '_', nickname.lower()).strip('_')
+                if not db_id:
+                    db_id = f"db_{int(time.time())}"
+                if db_id in APP_CONFIG.get("databases", {}):
+                    db_id = f"{db_id}_{int(time.time())}"
+                fname = f"indexer_{db_id}.db"
+                APP_CONFIG["databases"][db_id] = {
+                    "nickname": nickname,
+                    "filename": fname,
+                    "watch_folder": folder,
+                    "watch_active": bool(folder),
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                APP_CONFIG["active_db"] = db_id
+                sync_active_db_vars()
+                save_config()
+
+                # Initialize database schema immediately
+                conn_init = sqlite3.connect(DB_PATH)
+                indexer_engine.init_db(conn_init)
+                conn_init.close()
+
+                # If folder specified, start indexing
+                if folder and os.path.exists(folder):
+                    start_indexing_thread(folder, force_reindex=False, nickname=nickname, db_key=db_id)
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "id": db_id, "message": f"Created & activated database '{nickname}'"}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/databases/delete":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                target_id = data.get("id", "").strip()
+                delete_file = bool(data.get("delete_file", False))
+                dbs = APP_CONFIG.get("databases", {})
+                if target_id not in dbs:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "Database profile not found"}).encode("utf-8"))
+                    return
+                if len(dbs) <= 1:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "Cannot delete the last remaining database!"}).encode("utf-8"))
+                    return
+                # If deleted DB is active, switch to another
+                meta = dbs.pop(target_id)
+                storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
+                fpath = os.path.join(storage_dir, meta.get("filename", ""))
+                if delete_file and os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                        for suff in ["-wal", "-shm"]:
+                            if os.path.exists(fpath + suff):
+                                os.remove(fpath + suff)
+                    except Exception as ex:
+                        print(f"[DELETE DB FILE ERROR] {ex}")
+                if APP_CONFIG.get("active_db") == target_id:
+                    APP_CONFIG["active_db"] = list(dbs.keys())[0]
+                    sync_active_db_vars()
+                save_config()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "message": f"Database removed"}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/settings/save":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8"))
+                storage_dir = data.get("db_storage_dir", "").strip()
+                if storage_dir:
+                    storage_dir = os.path.abspath(storage_dir)
+                    os.makedirs(storage_dir, exist_ok=True)
+                    APP_CONFIG["db_storage_dir"] = storage_dir
+                if "watcher_settings" in data and isinstance(data["watcher_settings"], dict):
+                    ws = data["watcher_settings"]
+                    if "poll_interval_seconds" in ws:
+                        APP_CONFIG["watcher_settings"]["poll_interval_seconds"] = max(1, int(ws["poll_interval_seconds"]))
+                    if "debounce_delay_seconds" in ws:
+                        APP_CONFIG["watcher_settings"]["debounce_delay_seconds"] = max(0.5, float(ws["debounce_delay_seconds"]))
+                    if "max_file_size_mb" in ws:
+                        APP_CONFIG["watcher_settings"]["max_file_size_mb"] = max(1, float(ws["max_file_size_mb"]))
+                    if "ignore_hidden_temp" in ws:
+                        APP_CONFIG["watcher_settings"]["ignore_hidden_temp"] = bool(ws["ignore_hidden_temp"])
+                sync_active_db_vars()
+                save_config()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "message": "Settings saved successfully"}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+        elif parsed.path == "/api/bookmarks/add":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
@@ -4835,12 +2170,108 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
         elif parsed.path == "/api/index/start":
             qs = urllib.parse.parse_qs(parsed.query)
-            folder = qs.get("folder", [""])[0]
-            ok, msg = start_indexing_thread(folder)
+            folder = qs.get("folder", [""])[0] or WATCHER_CONFIG.get("folder", "")
+            force_reindex = qs.get("reindex", ["0"])[0] in ("1", "true")
+            force_refresh = qs.get("refresh", ["0"])[0] in ("1", "true")
+            nickname = qs.get("nickname", [""])[0].strip()
+            create_new_db = qs.get("create_db", ["0"])[0] in ("1", "true")
+
+            if create_new_db and folder:
+                if not nickname:
+                    nickname = os.path.basename(folder.rstrip('/')) or "Indexed Folder"
+                db_id = re.sub(r'[^a-zA-Z0-9_]', '_', nickname.lower()).strip('_')
+                if not db_id:
+                    db_id = f"db_{int(time.time())}"
+                if db_id in APP_CONFIG.get("databases", {}):
+                    db_id = f"{db_id}_{int(time.time())}"
+                fname = f"indexer_{db_id}.db"
+                APP_CONFIG["databases"][db_id] = {
+                    "nickname": nickname,
+                    "filename": fname,
+                    "watch_folder": folder,
+                    "watch_active": True,
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                APP_CONFIG["active_db"] = db_id
+                sync_active_db_vars()
+                save_config()
+                # Init new DB file
+                conn_init = sqlite3.connect(DB_PATH)
+                indexer_engine.init_db(conn_init)
+                conn_init.close()
+
+            ok, msg = start_indexing_thread(folder, force_reindex=force_reindex, force_refresh=force_refresh, nickname=nickname)
             self.send_response(200 if ok else 400)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"ok": ok, "message" if ok else "error": msg}).encode("utf-8"))
+            self.wfile.write(json.dumps({"ok": ok, "message" if ok else "error": msg, "active_db": APP_CONFIG.get("active_db")}).encode("utf-8"))
+        elif parsed.path == "/api/index/refresh":
+            folder = WATCHER_CONFIG.get("folder", "")
+            if not folder:
+                # Try inferring from files table
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    row = conn.cursor().execute("SELECT folder FROM files LIMIT 1;").fetchone()
+                    if row and row[0]:
+                        folder = row[0]
+                    conn.close()
+                except Exception:
+                    pass
+            if not folder or not os.path.exists(folder):
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "No indexed folder set to refresh. Please choose a folder."}).encode("utf-8"))
+            else:
+                ok, msg = start_indexing_thread(folder, force_refresh=True)
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": ok, "message" if ok else "error": msg}).encode("utf-8"))
+        elif parsed.path == "/api/index/reindex":
+            qs = urllib.parse.parse_qs(parsed.query)
+            folder = qs.get("folder", [""])[0] or WATCHER_CONFIG.get("folder", "")
+            if not folder:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    row = conn.cursor().execute("SELECT folder FROM files LIMIT 1;").fetchone()
+                    if row and row[0]:
+                        folder = row[0]
+                    conn.close()
+                except Exception:
+                    pass
+            if not folder or not os.path.exists(folder):
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "No folder specified to re-index."}).encode("utf-8"))
+            else:
+                ok, msg = start_indexing_thread(folder, force_reindex=True)
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": ok, "message" if ok else "error": msg}).encode("utf-8"))
+        elif parsed.path == "/api/notifications/read":
+            content_length = int(self.headers.get("Content-Length", 0))
+            event_ids = None
+            if content_length > 0:
+                try:
+                    body = self.rfile.read(content_length)
+                    data = json.loads(body.decode("utf-8"))
+                    event_ids = data.get("ids")
+                except Exception:
+                    pass
+            ok, msg = mark_change_events_read(event_ids=event_ids)
+            self.send_response(200 if ok else 500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
+        elif parsed.path == "/api/notifications/clear":
+            ok, msg = clear_all_change_events()
+            self.send_response(200 if ok else 500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": ok, "message": msg}).encode("utf-8"))
         elif parsed.path == "/api/watch/toggle":
             WATCHER_CONFIG["active"] = not WATCHER_CONFIG.get("active", False)
             save_config()

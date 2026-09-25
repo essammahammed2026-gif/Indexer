@@ -54,3 +54,17 @@ python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py
   sqlite3 sheets_index.db "PRAGMA integrity_check; PRAGMA wal_checkpoint(TRUNCATE);"
   ```
 - Backups are stored as `sheets_index.db.snap_YYYYMMDD`.
+
+## 6. Modular Refactoring & Regression Testing Workflow
+- Refer to [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md) for master checklists and phase execution.
+- Run automated unit and regression tests:
+  ```bash
+  python3 -m unittest discover tests/
+  ```
+- Verify web endpoints return `200 OK`:
+  ```bash
+  curl -s http://localhost:8088/api/databases | grep '"ok": true'
+  curl -s http://localhost:8088/api/settings | grep '"ok": true'
+  curl -s "http://localhost:8088/api/search?q=test" | grep '"ok": true'
+  ```
+
