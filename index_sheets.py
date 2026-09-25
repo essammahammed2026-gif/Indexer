@@ -58,6 +58,13 @@ def build_index(target_path=None):
             try:
                 count = indexer_engine.process_file(fpath, conn)
                 total_records += count
+                indexer_engine.record_change_event(
+                    conn,
+                    event_type="indexed",
+                    file_path=fpath,
+                    records_count=count,
+                    details=f"CLI batch indexed with {count:,} entries"
+                )
                 print(f"[{i}/{len(files_to_scan)}] Indexed {rel} ({count} entries)")
             except Exception as e:
                 print(f"[{i}/{len(files_to_scan)}] Error indexing {rel}: {e}")

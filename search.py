@@ -39,26 +39,19 @@ def open_in_app(file_path, sheet_name=None, row_idx=None):
 
 
 
+import indexer_engine
+
 def normalize_phone(val):
+    norm = indexer_engine.normalize_phone(val)
+    if norm:
+        return norm
     if not val:
         return ""
     digits = re.sub(r'\D', '', str(val))
-    if digits.startswith('20') and len(digits) in (12, 13, 14):
-        if len(digits) == 12:
-            return '0' + digits[2:]
-    if len(digits) == 10 and digits[0] == '1':
-        return '0' + digits
-    if len(digits) == 11 and digits.startswith('01'):
-        return digits
     return digits
 
 def normalize_arabic(text):
-    if not text:
-        return ""
-    text = re.sub(r'[إأآا]', 'ا', text)
-    text = re.sub(r'ة', 'ه', text)
-    text = re.sub(r'ى', 'ي', text)
-    return text.strip()
+    return indexer_engine.normalize_arabic(text)
 
 def search_phone(query, limit=50):
     norm = normalize_phone(query)

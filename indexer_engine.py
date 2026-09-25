@@ -143,7 +143,38 @@ def init_db(conn):
         UNIQUE(file_path, sheet_name)
     );
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS change_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        old_path TEXT,
+        filename TEXT,
+        records_count INTEGER DEFAULT 0,
+        details TEXT,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_change_events_created ON change_events(created_at DESC);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_change_events_unread ON change_events(is_read);")
     conn.commit()
+
+def record_change_event(conn, event_type, file_path, old_path=None, records_count=0, details=""):
+    """Log an index/file modification, addition, rename or removal in SQLite change_events."""
+    try:
+        cur = conn.cursor()
+        fname = os.path.basename(file_path) if file_path else ""
+        cur.execute("""
+        INSERT INTO change_events (event_type, file_path, old_path, filename, records_count, details, is_read)
+        VALUES (?, ?, ?, ?, ?, ?, 0);
+        """, (event_type, file_path, old_path, fname, records_count, details))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[CHANGE EVENT LOG ERROR] {e}")
+        return False
 
 def col_letters_to_num(col_str):
     num = 0
@@ -445,7 +476,7 @@ def parse_pdf(fpath):
         except Exception as e:
             print(f"[PDF OCR ERROR] {fpath}: {e}")
 
-    return rows_data
+    return rows_data, pdf_boxes
 
 def parse_image(fpath):
     rows_data = []
@@ -520,7 +551,10 @@ def parse_document(fpath):
     elif ext in ('.txt', '.log', '.json', '.sql'):
         return parse_txt(fpath)
     elif ext == '.pdf':
-        return parse_pdf(fpath)
+        res = parse_pdf(fpath)
+        if isinstance(res, tuple):
+            return res[0]
+        return res
     elif ext in ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'):
         return parse_image(fpath)
     return []
@@ -559,6 +593,22 @@ def process_file(fpath, conn):
                 line_s = line.strip()
                 if line_s:
                     all_rows.append(('Image', idx, [line_s]))
+    elif ext == '.pdf':
+        pdf_res = parse_pdf(fpath)
+        if isinstance(pdf_res, tuple):
+            all_rows, pdf_boxes = pdf_res
+            for sname, (w, h, boxes) in pdf_boxes.items():
+                if boxes:
+                    cur.execute("""
+                    INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(file_path, sheet_name) DO UPDATE SET
+                        img_width = excluded.img_width,
+                        img_height = excluded.img_height,
+                        boxes_json = excluded.boxes_json;
+                    """, (fpath, sname, w, h, json.dumps(boxes, ensure_ascii=False)))
+        else:
+            all_rows = pdf_res
     else:
         all_rows = parse_document(fpath)
 
@@ -680,6 +730,7 @@ def process_file(fpath, conn):
         VALUES (?, ?, ?, ?);
         """, fts_batch)
 
+    cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP WHERE file_id = ?;", (file_id,))
     conn.commit()
     return len(fts_batch)
 

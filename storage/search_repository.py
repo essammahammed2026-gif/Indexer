@@ -606,3 +606,86 @@ def delete_quick_filter(db_path, filter_id):
         return True, "Filter deleted"
     except Exception as e:
         return False, str(e)
+
+def get_ocr_boxes(db_path, file_path, sheet_name="Image"):
+    """Retrieve OCR bounding boxes, dimensions, and extracted text lines for an image or PDF page."""
+    import json
+    if not db_path or not os.path.exists(db_path):
+        return None
+    try:
+        conn = get_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS ocr_boxes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL,
+            sheet_name TEXT NOT NULL,
+            img_width INTEGER,
+            img_height INTEGER,
+            boxes_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(file_path, sheet_name)
+        );
+        """)
+        cur.execute("""
+        SELECT img_width, img_height, boxes_json FROM ocr_boxes
+        WHERE file_path = ? AND sheet_name = ?;
+        """, (file_path, sheet_name))
+        row = cur.fetchone()
+        
+        # Also query extracted text lines from universal_search
+        lines = []
+        try:
+            cur.execute("""
+            SELECT content FROM universal_search
+            WHERE file_path = ? AND sheet_name = ?
+            ORDER BY CAST(row_idx AS INTEGER) ASC;
+            """, (file_path, sheet_name))
+            lines = [r[0] for r in cur.fetchall() if r[0] and r[0].strip()]
+        except Exception:
+            pass
+
+        # If bounding boxes are not in database yet and file exists, generate on-demand
+        if not row and os.path.exists(file_path):
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext in ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff'):
+                try:
+                    import indexer_engine
+                    text, boxes = indexer_engine.run_ocr_detailed(file_path)
+                    w, h = indexer_engine.get_image_dimensions(file_path)
+                    if boxes:
+                        cur.execute("""
+                        INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(file_path, sheet_name) DO UPDATE SET
+                            img_width = excluded.img_width,
+                            img_height = excluded.img_height,
+                            boxes_json = excluded.boxes_json;
+                        """, (file_path, sheet_name, w, h, json.dumps(boxes, ensure_ascii=False)))
+                        conn.commit()
+                        row = (w, h, json.dumps(boxes, ensure_ascii=False))
+                    if not lines and text:
+                        lines = [l.strip() for l in text.splitlines() if l.strip()]
+                except Exception as ex:
+                    print(f"[ON-DEMAND OCR ERROR] {ex}")
+
+        conn.close()
+        if row:
+            return {
+                "width": row[0],
+                "height": row[1],
+                "boxes": json.loads(row[2]),
+                "lines": lines
+            }
+        elif lines:
+            return {
+                "width": None,
+                "height": None,
+                "boxes": [],
+                "lines": lines
+            }
+        return None
+    except Exception as e:
+        print(f"[OCR BOXES ERROR] {e}")
+        return None
+

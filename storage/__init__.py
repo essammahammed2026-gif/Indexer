@@ -8,7 +8,8 @@ from .search_repository import (
     get_stats,
     get_quick_filters,
     add_quick_filter,
-    delete_quick_filter
+    delete_quick_filter,
+    get_ocr_boxes
 )
 from .bookmarks import (
     get_bookmarks,
@@ -32,6 +33,7 @@ __all__ = [
     "get_quick_filters",
     "add_quick_filter",
     "delete_quick_filter",
+    "get_ocr_boxes",
     "get_bookmarks",
     "add_bookmark",
     "remove_bookmark",
@@ -42,3 +44,4 @@ __all__ = [
     "clear_all_change_events",
     "backup_database"
 ]
+

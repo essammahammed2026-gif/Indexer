@@ -35,666 +35,90 @@ from core import (
 )
 import storage
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+import storage
+from services import (
+    BASE_DIR,
+    CONFIG_PATH,
+    UPLOADS_DIR,
+    INDEX_LOCK,
+    INDEX_STATE,
+    APP_CONFIG,
+    WATCHER_CONFIG,
+    get_active_db_path,
+    sync_active_db_vars,
+    load_config,
+    save_config,
+    SUPPORTED_EXTENSIONS,
+    index_single_target,
+    start_indexing_thread,
+    folder_watcher_loop
+)
+from services.state import DB_PATH
+
 PORT = 8088
 
-# Storage directory for user-uploaded scoped files & images
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-# Global indexing and watcher states
-INDEX_STATE = {
-    "running": False,
-    "total": 0,
-    "current": 0,
-    "current_file": "",
-    "records_indexed": 0,
-    "percent": 0,
-    "folder": "",
-    "status_message": "Idle"
-}
+def get_db_path():
+    return get_active_db_path()
 
-# Multi-Database & Watcher App Configuration
-APP_CONFIG = {
-    "db_storage_dir": BASE_DIR,
-    "active_db": "default",
-    "databases": {
-        "default": {
-            "nickname": "Main Database",
-            "filename": "sheets_index.db",
-            "watch_folder": "",
-            "watch_active": False,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-    },
-    "watcher_settings": {
-        "poll_interval_seconds": 3,
-        "debounce_delay_seconds": 2.0,
-        "max_file_size_mb": 250,
-        "ignore_hidden_temp": True
-    }
-}
-
-DB_PATH = os.path.join(BASE_DIR, "sheets_index.db")
-WATCHER_CONFIG = {
-    "folder": "",
-    "active": False
-}
-
-INDEX_LOCK = threading.Lock()
-
-def get_active_db_path():
-    """Compute absolute file path to the active SQLite database file."""
-    storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
-    try:
-        os.makedirs(storage_dir, exist_ok=True)
-    except Exception:
-        storage_dir = BASE_DIR
-    active_key = APP_CONFIG.get("active_db", "default")
-    db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
-    fname = db_meta.get("filename") or "sheets_index.db"
-    return os.path.join(storage_dir, fname)
-
-def sync_active_db_vars():
-    """Keep global DB_PATH and WATCHER_CONFIG in sync with the active database profile."""
-    global DB_PATH, WATCHER_CONFIG
-    DB_PATH = get_active_db_path()
-    active_key = APP_CONFIG.get("active_db", "default")
-    db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
-    WATCHER_CONFIG["folder"] = db_meta.get("watch_folder", "")
-    WATCHER_CONFIG["active"] = db_meta.get("watch_active", False)
-
-def load_config():
-    global APP_CONFIG, WATCHER_CONFIG, DB_PATH
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Backward compatibility migration from old config format
-            if "watch_folder" in data and "databases" not in data:
-                old_folder = data.get("watch_folder", "")
-                old_active = data.get("watch_active", False)
-                APP_CONFIG["databases"]["default"]["watch_folder"] = old_folder
-                APP_CONFIG["databases"]["default"]["watch_active"] = old_active
-                if old_folder:
-                    APP_CONFIG["databases"]["default"]["nickname"] = os.path.basename(old_folder.rstrip('/')) or "Main Database"
-            else:
-                if "db_storage_dir" in data:
-                    APP_CONFIG["db_storage_dir"] = data["db_storage_dir"]
-                if "active_db" in data:
-                    APP_CONFIG["active_db"] = data["active_db"]
-                if "databases" in data and isinstance(data["databases"], dict) and data["databases"]:
-                    APP_CONFIG["databases"] = data["databases"]
-                if "watcher_settings" in data and isinstance(data["watcher_settings"], dict):
-                    APP_CONFIG["watcher_settings"].update(data["watcher_settings"])
-            sync_active_db_vars()
-        except Exception as e:
-            print(f"[CONFIG] Error loading config: {e}")
-            sync_active_db_vars()
-    else:
-        # Default initialization
-        sync_active_db_vars()
-        # If default sheets_index.db already exists in BASE_DIR, initialize from it
-        try:
-            if os.path.exists(DB_PATH):
-                conn = sqlite3.connect(DB_PATH)
-                cur = conn.cursor()
-                cur.execute("SELECT folder FROM files LIMIT 1;")
-                row = cur.fetchone()
-                if row and row[0]:
-                    fld = row[0]
-                    while "/FINAL" in fld and not fld.endswith("/FINAL"):
-                        fld = os.path.dirname(fld)
-                    APP_CONFIG["databases"]["default"]["watch_folder"] = fld
-                    APP_CONFIG["databases"]["default"]["watch_active"] = True
-                    APP_CONFIG["databases"]["default"]["nickname"] = os.path.basename(fld.rstrip('/')) or "Main Database"
-                    sync_active_db_vars()
-                    save_config()
-                conn.close()
-        except Exception:
-            pass
-
-def save_config():
-    try:
-        active_key = APP_CONFIG.get("active_db", "default")
-        if active_key in APP_CONFIG.get("databases", {}):
-            APP_CONFIG["databases"][active_key]["watch_folder"] = WATCHER_CONFIG.get("folder", "")
-            APP_CONFIG["databases"][active_key]["watch_active"] = WATCHER_CONFIG.get("active", False)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(APP_CONFIG, f, indent=2)
-    except Exception as e:
-        print(f"[CONFIG] Error saving config: {e}")
-
-
+# Data & Search Helpers delegating to storage & services
 def get_stats():
     active_key = APP_CONFIG.get("active_db", "default")
     db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
     nickname = db_meta.get("nickname", "Main Database")
     storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
     folder = WATCHER_CONFIG.get("folder", "")
-    res = storage.get_stats(DB_PATH, folder=folder, active_key=active_key, nickname=nickname, storage_dir=storage_dir)
+    res = storage.get_stats(get_active_db_path(), folder=folder, active_key=active_key, nickname=nickname, storage_dir=storage_dir)
     res["watcher"] = WATCHER_CONFIG.get("active", False)
     return res
 
 def get_quick_filters():
-    return storage.get_quick_filters(DB_PATH)
+    return storage.get_quick_filters(get_active_db_path())
 
 def add_quick_filter(name, query):
-    return storage.add_quick_filter(DB_PATH, name, query)
+    return storage.add_quick_filter(get_active_db_path(), name, query)
 
 def delete_quick_filter(filter_id):
-    return storage.delete_quick_filter(DB_PATH, filter_id)
+    return storage.delete_quick_filter(get_active_db_path(), filter_id)
 
-# Bookmark Helpers
 def get_bookmarks():
-    return storage.get_bookmarks(DB_PATH)
+    return storage.get_bookmarks(get_active_db_path())
 
 def add_bookmark(file_path, sheet_name, row_idx, tag="Lead", notes=""):
-    return storage.add_bookmark(DB_PATH, file_path, sheet_name, row_idx, tag=tag, notes=notes)
+    return storage.add_bookmark(get_active_db_path(), file_path, sheet_name, row_idx, tag=tag, notes=notes)
 
 def remove_bookmark(file_path, sheet_name, row_idx):
-    return storage.remove_bookmark(DB_PATH, file_path, sheet_name, row_idx)
+    return storage.remove_bookmark(get_active_db_path(), file_path, sheet_name, row_idx)
 
 def get_context_window(file_path, sheet_name, row_idx, window=3):
-    return storage.get_context_window(DB_PATH, file_path, sheet_name, row_idx, window=window)
+    return storage.get_context_window(get_active_db_path(), file_path, sheet_name, row_idx, window=window)
 
 def get_ocr_boxes(file_path, sheet_name="Image"):
-    """Retrieve OCR bounding boxes, dimensions, and extracted text lines for an image or PDF page."""
-    if not os.path.exists(DB_PATH):
-        return None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS ocr_boxes (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, sheet_name TEXT NOT NULL, img_width INTEGER, img_height INTEGER, boxes_json TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(file_path, sheet_name));")
-        cur.execute("""
-        SELECT img_width, img_height, boxes_json FROM ocr_boxes
-        WHERE file_path = ? AND sheet_name = ?;
-        """, (file_path, sheet_name))
-        row = cur.fetchone()
-        
-        # Also query extracted text lines from universal_search
-        lines = []
-        try:
-            cur.execute("""
-            SELECT content FROM universal_search
-            WHERE file_path = ? AND sheet_name = ?
-            ORDER BY CAST(row_idx AS INTEGER) ASC;
-            """, (file_path, sheet_name))
-            lines = [r[0] for r in cur.fetchall() if r[0] and r[0].strip()]
-        except Exception:
-            pass
-
-        # If bounding boxes are not in database yet and file exists, generate on-demand!
-        if not row and os.path.exists(file_path):
-            ext = os.path.splitext(file_path)[1].lower()
-            if ext in ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff'):
-                try:
-                    import indexer_engine
-                    text, boxes = indexer_engine.run_ocr_detailed(file_path)
-                    w, h = indexer_engine.get_image_dimensions(file_path)
-                    if boxes:
-                        cur.execute("""
-                        INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(file_path, sheet_name) DO UPDATE SET
-                            img_width = excluded.img_width,
-                            img_height = excluded.img_height,
-                            boxes_json = excluded.boxes_json;
-                        """, (file_path, sheet_name, w, h, json.dumps(boxes, ensure_ascii=False)))
-                        conn.commit()
-                        row = (w, h, json.dumps(boxes, ensure_ascii=False))
-                    if not lines and text:
-                        lines = [l.strip() for l in text.splitlines() if l.strip()]
-                except Exception as ex:
-                    print(f"[ON-DEMAND OCR ERROR] {ex}")
-
-        conn.close()
-        if row:
-            return {
-                "width": row[0],
-                "height": row[1],
-                "boxes": json.loads(row[2]),
-                "lines": lines
-            }
-        elif lines:
-            return {
-                "width": None,
-                "height": None,
-                "boxes": [],
-                "lines": lines
-            }
-        return None
-    except Exception as e:
-        print(f"[OCR BOXES ERROR] {e}")
-        return None
+    return storage.get_ocr_boxes(get_active_db_path(), file_path, sheet_name=sheet_name)
 
 def backup_database():
-    return storage.backup_database(DB_PATH)
+    return storage.backup_database(get_active_db_path())
 
 def record_change_event(event_type, file_path, old_path=None, records_count=0, details=""):
-    return storage.record_change_event(DB_PATH, event_type, file_path, old_path=old_path, records_count=records_count, details=details)
+    return storage.record_change_event(get_active_db_path(), event_type, file_path, old_path=old_path, records_count=records_count, details=details)
 
 def get_change_events(limit=50, offset=0, unread_only=False):
-    return storage.get_change_events(DB_PATH, limit=limit, offset=offset, unread_only=unread_only)
+    return storage.get_change_events(get_active_db_path(), limit=limit, offset=offset, unread_only=unread_only)
 
 def mark_change_events_read(event_ids=None):
-    return storage.mark_change_events_read(DB_PATH, event_ids=event_ids)
+    return storage.mark_change_events_read(get_active_db_path(), event_ids=event_ids)
 
 def clear_all_change_events():
-    return storage.clear_all_change_events(DB_PATH)
-
-
+    return storage.clear_all_change_events(get_active_db_path())
 
 def query_db(query, limit=50, offset=0, scope_file=None, scope_folder=None, mode="general"):
-    return storage.query_db(DB_PATH, query, limit=limit, offset=offset, scope_file=scope_file, scope_folder=scope_folder, mode=mode)
-
-def index_single_target(target_path):
-    """
-    Synchronously index a single file or a folder (used by the Scoped Target Search tab).
-    Returns (ok: bool, message: str, count: int, scanned_files: list).
-    """
-    target_path = os.path.abspath(target_path)
-    if not os.path.exists(target_path):
-        return False, f"Target path does not exist: {target_path}", 0, []
-
-    files_to_index = []
-    if os.path.isdir(target_path):
-        for root, dirs, files in os.walk(target_path):
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext in SUPPORTED_EXTENSIONS and not f.startswith('~$') and not f.startswith('.'):
-                    files_to_index.append(os.path.join(root, f))
-    else:
-        files_to_index = [target_path]
-
-    if not files_to_index:
-        return False, "No supported documents or spreadsheets found in selection", 0, []
-
-    conn = sqlite3.connect(DB_PATH)
-    indexer_engine.init_db(conn)
-    total_cnt = 0
-    scanned = []
-    for fpath in files_to_index:
-        try:
-            cnt = indexer_engine.process_file(fpath, conn)
-            total_cnt += cnt
-            scanned.append({"file": os.path.basename(fpath), "path": fpath, "records": cnt})
-        except Exception as e:
-            print(f"[SCOPED INDEX ERROR] {fpath}: {e}")
-
-    conn.close()
-    return True, f"Indexed {len(files_to_index)} item(s) successfully ({total_cnt:,} records)", total_cnt, scanned
-
-SUPPORTED_EXTENSIONS = (
-    '.xlsx', '.xls', '.csv', '.tsv',
-    '.docx', '.odt', '.txt', '.log', '.json', '.sql', '.pdf',
-    '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'
-)
-
-def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False, nickname=None, db_key=None):
-    """
-    Run folder scan & index with live progress tracking & auto-backup.
-    - force_reindex=True: clears existing index (files, cdr, universal_search, ocr) and indexes everything from scratch.
-    - force_refresh=True: rechecks all files against database mtime/size, updates modified/added files, removes missing files without full re-index.
-    - nickname: Optional human-readable nickname for this database.
-    - db_key: Optional existing or new database profile key.
-    """
-    global INDEX_STATE
-    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        return False, f"Folder does not exist: {folder_path}"
-
-    with INDEX_LOCK:
-        if INDEX_STATE["running"]:
-            return False, "Indexing is already in progress!"
-        INDEX_STATE["running"] = True
-        INDEX_STATE["folder"] = folder_path
-        INDEX_STATE["current"] = 0
-        INDEX_STATE["total"] = 0
-        INDEX_STATE["percent"] = 0
-        INDEX_STATE["records_indexed"] = 0
-        if force_reindex:
-            INDEX_STATE["current_file"] = "Creating safety backup & wiping index for full rebuild..."
-            INDEX_STATE["status_message"] = "Preparing complete re-index..."
-        elif force_refresh:
-            INDEX_STATE["current_file"] = "Scanning for added, modified or moved documents..."
-            INDEX_STATE["status_message"] = "Checking for file changes..."
-        else:
-            INDEX_STATE["current_file"] = "Creating safety backup & scanning folder..."
-            INDEX_STATE["status_message"] = "Scanning folder..."
-
-    def _worker():
-        global INDEX_STATE, DB_PATH
-        try:
-            # 1. Automatic safety snapshot before starting index if database exists
-            if os.path.exists(DB_PATH):
-                backup_database()
-
-            conn = sqlite3.connect(DB_PATH)
-            indexer_engine.init_db(conn)
-
-            # If force_reindex: reset index tables (preserve bookmarks and quick_filters)
-            if force_reindex:
-                print(f"[RE-INDEX] Wiping current index data for fresh re-index of {folder_path}...")
-                conn.execute("DELETE FROM cdr_records;")
-                conn.execute("DELETE FROM universal_search;")
-                conn.execute("DELETE FROM ocr_boxes;")
-                conn.execute("DELETE FROM files;")
-                conn.commit()
-                record_change_event(
-                    event_type="reindex_started",
-                    file_path=folder_path,
-                    details="Full index rebuild initiated"
-                )
-
-            # Collect existing files in DB
-            db_files = {}
-            if not force_reindex:
-                try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT file_path, filename FROM files;")
-                    for fp, fn in cur.fetchall():
-                        db_files[fp] = fn
-                except Exception:
-                    pass
-
-            files_to_scan = []
-            for root, dirs, files in os.walk(folder_path):
-                for f in files:
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS and not f.startswith('~$') and not f.startswith('.'):
-                        files_to_scan.append(os.path.join(root, f))
-
-            INDEX_STATE["total"] = len(files_to_scan)
-            if not files_to_scan:
-                INDEX_STATE["percent"] = 100
-                INDEX_STATE["status_message"] = "No supported document, sheet, or image files found in folder"
-                INDEX_STATE["running"] = False
-                conn.close()
-                return
-
-            # In force_refresh mode: determine which files actually need indexing or were deleted/moved
-            files_to_process = files_to_scan
-            removed_count = 0
-            if force_refresh and not force_reindex:
-                current_set = set(files_to_scan)
-                # Check for removed or renamed files in DB
-                for old_fp in list(db_files.keys()):
-                    if old_fp.startswith(folder_path) and old_fp not in current_set:
-                        old_name = db_files[old_fp]
-                        matched_rename = None
-                        for cur_fp in files_to_scan:
-                            if cur_fp not in db_files and os.path.basename(cur_fp) == old_name:
-                                matched_rename = cur_fp
-                                break
-
-                        cur = conn.cursor()
-                        cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (old_fp,))
-                        row = cur.fetchone()
-                        if row:
-                            fid = row[0]
-                            cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (fid,))
-                            cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (old_fp,))
-                            cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (old_fp,))
-                            cur.execute("DELETE FROM files WHERE file_id = ?;", (fid,))
-                            conn.commit()
-
-                        if matched_rename:
-                            record_change_event(
-                                event_type="renamed",
-                                file_path=matched_rename,
-                                old_path=old_fp,
-                                details=f"Moved/renamed from {os.path.basename(old_fp)} to {os.path.basename(matched_rename)}"
-                            )
-                        else:
-                            record_change_event(
-                                event_type="deleted",
-                                file_path=old_fp,
-                                details=f"File deleted or moved out of watch directory"
-                            )
-                        removed_count += 1
-
-                # Filter files_to_process: only newly added or modified since indexed_at
-                cur = conn.cursor()
-                cur.execute("SELECT file_path, indexed_at FROM files;")
-                db_indexed = {r[0]: r[1] for r in cur.fetchall()}
-
-                needed = []
-                for fp in files_to_scan:
-                    if fp not in db_indexed:
-                        needed.append(fp)
-                    else:
-                        try:
-                            mtime = os.path.getmtime(fp)
-                            idx_str = db_indexed[fp]
-                            idx_time = time.mktime(time.strptime(idx_str, "%Y-%m-%d %H:%M:%S")) if idx_str else 0
-                            if mtime > idx_time:
-                                needed.append(fp)
-                        except Exception:
-                            needed.append(fp)
-                files_to_process = needed
-                INDEX_STATE["total"] = len(files_to_process)
-                if not files_to_process:
-                    INDEX_STATE["percent"] = 100
-                    INDEX_STATE["status_message"] = f"Index is up to date! ({len(files_to_scan)} documents checked, {removed_count} pruned)"
-                    INDEX_STATE["running"] = False
-                    conn.close()
-                    return
-
-            total_records = 0
-            completed = 0
-            for fpath in files_to_process:
-                fname = os.path.basename(fpath)
-                completed += 1
-                INDEX_STATE["current"] = completed
-                INDEX_STATE["current_file"] = fname
-                INDEX_STATE["percent"] = int((completed / len(files_to_process)) * 100)
-                INDEX_STATE["status_message"] = f"Indexing {completed}/{len(files_to_process)}: {fname}"
-
-                is_new = (fpath not in db_files)
-                try:
-                    cnt = indexer_engine.process_file(fpath, conn)
-                    total_records += cnt
-                    INDEX_STATE["records_indexed"] = total_records
-
-                    # If force_refresh or single refresh, record change notification
-                    if force_refresh:
-                        record_change_event(
-                            event_type="added" if is_new else "modified",
-                            file_path=fpath,
-                            records_count=cnt,
-                            details=f"{'Added new file' if is_new else 'Updated modified file'} with {cnt:,} records"
-                        )
-                except Exception as ex:
-                    print(f"[INDEX ERROR] {fname}: {ex}")
-
-            if force_reindex:
-                record_change_event(
-                    event_type="reindex_completed",
-                    file_path=folder_path,
-                    records_count=total_records,
-                    details=f"Full re-index complete: {len(files_to_process)} files ({total_records:,} records)"
-                )
-
-            conn.close()
-
-            INDEX_STATE["percent"] = 100
-            INDEX_STATE["status_message"] = f"Completed! Processed {len(files_to_process)} documents ({total_records:,} searchable entries)"
-            
-            # Automatically update watch folder & database registry
-            WATCHER_CONFIG["folder"] = folder_path
-            WATCHER_CONFIG["active"] = True
-            active_key = APP_CONFIG.get("active_db", "default")
-            if active_key in APP_CONFIG.get("databases", {}):
-                APP_CONFIG["databases"][active_key]["watch_folder"] = folder_path
-                APP_CONFIG["databases"][active_key]["watch_active"] = True
-                if nickname:
-                    APP_CONFIG["databases"][active_key]["nickname"] = nickname
-            save_config()
-        except Exception as e:
-            INDEX_STATE["status_message"] = f"Error during indexing: {e}"
-        finally:
-            INDEX_STATE["running"] = False
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    return True, "Indexing started"
-
-# Background Folder Watcher
-def folder_watcher_loop():
-    known_files = {} # {path: (mtime, size)}
-    
-    while True:
-        try:
-            folder = WATCHER_CONFIG.get("folder")
-            active = WATCHER_CONFIG.get("active", False)
-            w_settings = APP_CONFIG.get("watcher_settings", {})
-            poll_interval = max(1, int(w_settings.get("poll_interval_seconds", 3)))
-            debounce_sec = max(0.5, float(w_settings.get("debounce_delay_seconds", 2.0)))
-            max_size_mb = float(w_settings.get("max_file_size_mb", 250))
-            ignore_hidden_temp = bool(w_settings.get("ignore_hidden_temp", True))
-            max_bytes = max_size_mb * 1024 * 1024 if max_size_mb > 0 else float('inf')
-            
-            if active and folder and os.path.exists(folder) and os.path.isdir(folder) and not INDEX_STATE["running"]:
-                current_files = {}
-                for root, dirs, files in os.walk(folder):
-                    # Prune hidden directories
-                    if ignore_hidden_temp:
-                        dirs[:] = [d for d in dirs if not d.startswith('.')]
-                    for f in files:
-                        if ignore_hidden_temp and (f.startswith('~$') or f.startswith('.')):
-                            continue
-                        ext = os.path.splitext(f)[1].lower()
-                        if ext in SUPPORTED_EXTENSIONS:
-                            full_p = os.path.join(root, f)
-                            try:
-                                stat = os.stat(full_p)
-                                if stat.st_size <= max_bytes:
-                                    current_files[full_p] = (stat.st_mtime, stat.st_size)
-                            except Exception:
-                                pass
-
-                # If first run on this database, check which files are in DB
-                if not known_files and os.path.exists(DB_PATH):
-                    try:
-                        conn = sqlite3.connect(DB_PATH)
-                        cur = conn.cursor()
-                        cur.execute("SELECT file_path FROM files;")
-                        for (fp,) in cur.fetchall():
-                            if fp in current_files:
-                                known_files[fp] = current_files[fp]
-                        conn.close()
-                    except Exception:
-                        pass
-
-                # Detect newly added or modified files
-                changed_files = []
-                for p, st in current_files.items():
-                    if p not in known_files or known_files[p] != st:
-                        changed_files.append(p)
-
-                # Detect deleted or moved files
-                missing_files = []
-                for p in list(known_files.keys()):
-                    if p not in current_files:
-                        missing_files.append(p)
-
-                # Process missing (deleted / renamed) files
-                if missing_files and not INDEX_STATE["running"]:
-                    try:
-                        conn = sqlite3.connect(DB_PATH)
-                        indexer_engine.init_db(conn)
-                        for mp in missing_files:
-                            old_name = os.path.basename(mp)
-                            renamed_to = None
-                            for cf in changed_files:
-                                if os.path.basename(cf) == old_name:
-                                    renamed_to = cf
-                                    break
-
-                            # Clean old path from database
-                            cur = conn.cursor()
-                            cur.execute("SELECT file_id FROM files WHERE file_path = ?;", (mp,))
-                            row = cur.fetchone()
-                            if row:
-                                fid = row[0]
-                                cur.execute("DELETE FROM cdr_records WHERE file_id = ?;", (fid,))
-                                cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (mp,))
-                                cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (mp,))
-                                cur.execute("DELETE FROM files WHERE file_id = ?;", (fid,))
-                                conn.commit()
-
-                            del known_files[mp]
-
-                            if renamed_to:
-                                record_change_event(
-                                    event_type="renamed",
-                                    file_path=renamed_to,
-                                    old_path=mp,
-                                    details=f"File moved or renamed from {os.path.basename(mp)} to {os.path.basename(renamed_to)}"
-                                )
-                                print(f"[WATCHER] Detected file rename: {mp} -> {renamed_to}")
-                            else:
-                                record_change_event(
-                                    event_type="deleted",
-                                    file_path=mp,
-                                    details="File was removed or deleted from watched directory"
-                                )
-                                print(f"[WATCHER] Detected file removal: {mp}")
-                        conn.close()
-                    except Exception as e:
-                        print(f"[WATCHER ERROR] Failed to clean removed files: {e}")
-
-                # Process newly added or modified files
-                if changed_files and not INDEX_STATE["running"]:
-                    # Debounce check: ensure files have settled (size & mtime steady for debounce_sec)
-                    time.sleep(debounce_sec)
-                    ready_files = []
-                    for cf in changed_files:
-                        try:
-                            st_now = os.stat(cf)
-                            if (st_now.st_mtime, st_now.st_size) == current_files.get(cf):
-                                ready_files.append(cf)
-                        except Exception:
-                            pass
-
-                    if ready_files:
-                        print(f"[WATCHER] Processing {len(ready_files)} settled file(s) in {folder}")
-                        conn = sqlite3.connect(DB_PATH)
-                        indexer_engine.init_db(conn)
-                        for cf in ready_files:
-                            is_new_file = cf not in known_files
-                            print(f"[WATCHER] Auto-indexing: {os.path.basename(cf)}")
-                            cnt = 0
-                            try:
-                                cnt = indexer_engine.process_file(cf, conn)
-                                print(f"[WATCHER] Indexed {cnt} records from {os.path.basename(cf)}")
-                                
-                                record_change_event(
-                                    event_type="added" if is_new_file else "modified",
-                                    file_path=cf,
-                                    records_count=cnt,
-                                    details=f"{'Added new file' if is_new_file else 'Updated modified file'} with {cnt:,} searchable entries"
-                                )
-                            except Exception as e:
-                                print(f"[WATCHER ERROR] Failed to index {cf}: {e}")
-                            
-                            try:
-                                st = os.stat(cf)
-                                known_files[cf] = (st.st_mtime, st.st_size)
-                            except Exception:
-                                known_files[cf] = current_files.get(cf)
-                        conn.close()
-        except Exception as e:
-            print(f"[WATCHER ERROR] Loop error: {e}")
-            
-        time.sleep(poll_interval)
+    return storage.query_db(get_active_db_path(), query, limit=limit, offset=offset, scope_file=scope_file, scope_folder=scope_folder, mode=mode)
 
 def get_html_template():
     tpl_path = os.path.join(BASE_DIR, "templates", "index.html")
     with open(tpl_path, "r", encoding="utf-8") as f:
         return f.read()
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
