@@ -23,6 +23,16 @@ import time
 import shutil
 import tempfile
 import indexer_engine
+from core import (
+    normalize_phone,
+    normalize_arabic,
+    levenshtein_dist,
+    parse_google_query,
+    open_in_app,
+    reveal_in_folder,
+    pick_folder_dialog,
+    pick_file_dialog
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -155,88 +165,6 @@ def save_config():
     except Exception as e:
         print(f"[CONFIG] Error saving config: {e}")
 
-def open_in_app(file_path, sheet_name=None, row_idx=None):
-    if not file_path or not os.path.exists(file_path):
-        return False, f"File not found: {file_path}"
-    
-    ext = os.path.splitext(file_path)[1].lower()
-    env = os.environ.copy()
-    abs_p = os.path.abspath(file_path)
-    
-    # Try LibreOffice Calc for spreadsheet files
-    if ext in ('.xlsx', '.xls', '.csv', '.ods'):
-        quoted_path = urllib.parse.quote(abs_p)
-        if sheet_name and row_idx:
-            uri = f"file://{quoted_path}#{sheet_name}.A{row_idx}"
-        elif row_idx:
-            uri = f"file://{quoted_path}#A{row_idx}"
-        else:
-            uri = f"file://{quoted_path}"
-            
-        try:
-            subprocess.Popen(
-                ['localc', '--norestore', uri],
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True
-            )
-            return True, f"Opening in Calc at Row {row_idx or 1}"
-        except Exception:
-            pass
-
-    # Fallback to system default application (xdg-open)
-    try:
-        subprocess.Popen(
-            ['xdg-open', abs_p],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        return True, "Opened with default application"
-    except Exception as e:
-        return False, str(e)
-
-def reveal_in_folder(file_path):
-    if not file_path:
-        return False, "File path is empty"
-    abs_p = os.path.abspath(file_path)
-    folder = abs_p if os.path.isdir(abs_p) else os.path.dirname(abs_p)
-    if not os.path.exists(folder):
-        return False, f"Folder not found: {folder}"
-    try:
-        subprocess.Popen(
-            ['xdg-open', folder],
-            env=os.environ.copy(),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        return True, f"Opened folder: {folder}"
-    except Exception as e:
-        return False, str(e)
-
-def normalize_phone(val):
-    if not val:
-        return ""
-    digits = re.sub(r'\D', '', str(val))
-    if digits.startswith('20') and len(digits) in (12, 13, 14):
-        if len(digits) == 12:
-            return '0' + digits[2:]
-    if len(digits) == 10 and digits[0] == '1':
-        return '0' + digits
-    if len(digits) == 11 and digits.startswith('01'):
-        return digits
-    return digits
-
-def normalize_arabic(text):
-    if not text:
-        return ""
-    text = re.sub(r'[إأآا]', 'ا', text)
-    text = re.sub(r'ة', 'ه', text)
-    text = re.sub(r'ى', 'ي', text)
-    return text.strip()
 
 def get_stats():
     folder = WATCHER_CONFIG.get("folder", "")
@@ -619,101 +547,6 @@ def clear_all_change_events():
         return False, str(e)
 
 
-def levenshtein_dist(s1, s2):
-    """Fast, pure standard-library Levenshtein distance for fuzzy typo matching."""
-    if s1 == s2:
-        return 0
-    if len(s1) == 0:
-        return len(s2)
-    if len(s2) == 0:
-        return len(s1)
-    # Optimization: limit to 40 chars max for speed
-    s1, s2 = s1[:40], s2[:40]
-    v0 = list(range(len(s2) + 1))
-    v1 = [0] * (len(s2) + 1)
-    for i in range(len(s1)):
-        v1[0] = i + 1
-        for j in range(len(s2)):
-            cost = 0 if s1[i] == s2[j] else 1
-            v1[j + 1] = min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost)
-        v0 = v1[:]
-    return v0[len(s2)]
-
-def parse_google_query(raw_query):
-    """
-    Parses Google-style search operators:
-    - Exact phrases: "word1 word2"
-    - Exclude words: -term
-    - OR logic: term1 OR term2
-    - AND logic: term1 AND term2
-    - File extension filter: filetype:pdf or filetype:xlsx
-    Returns dict: fts_match, filetype, exact_phrases, clean_tokens.
-    """
-    clean = (raw_query or "").strip()
-    if not clean:
-        return {"fts_match": "", "filetype": None, "exact_phrases": [], "clean_tokens": []}
-
-    # 1. filetype:ext
-    filetype = None
-    ft_m = re.search(r"\bfiletype:([a-zA-Z0-9]+)\b", clean, re.IGNORECASE)
-    if ft_m:
-        filetype = ft_m.group(1).lower().strip()
-        clean = re.sub(r"\bfiletype:[a-zA-Z0-9]+\b", " ", clean, flags=re.IGNORECASE).strip()
-
-    # 2. Extract exact phrases in quotes "..."
-    exact_phrases = [p.strip() for p in re.findall(r"\"([^\"]+)\"", clean) if p.strip()]
-    clean_no_quotes = re.sub(r"\"[^\"]*\"", " ", clean).strip()
-
-    # 3. Parse negative terms (-term)
-    tokens = clean_no_quotes.split()
-    pos_tokens = []
-    neg_tokens = []
-    for t in tokens:
-        if t.startswith("-") and len(t) > 1:
-            term = t[1:].strip("(),:;\"'")
-            if term:
-                neg_tokens.append(term)
-        else:
-            pos_tokens.append(t)
-
-    # 4. Handle OR / AND logic in remaining positive tokens
-    pos_str = " ".join(pos_tokens)
-    fts_parts = []
-
-    # Add exact phrases
-    for ph in exact_phrases:
-        clean_ph = ph.replace('"', '')
-        fts_parts.append(f'"{clean_ph}"')
-
-    or_split = re.split(r"\s+OR\s+", pos_str, flags=re.IGNORECASE)
-    if len(or_split) > 1:
-        sub_fts = []
-        for segment in or_split:
-            words = [w.strip("(),:;\"'") for w in segment.split() if w.strip("(),:;\"'") and w.upper() != "AND"]
-            if words:
-                sub_fts.append(" AND ".join([f'""{w}""' for w in words]))
-        if sub_fts:
-            fts_parts.append("(" + " OR ".join(sub_fts) + ")")
-    else:
-        words = [w.strip("(),:;\"'") for w in pos_str.split() if w.strip("(),:;\"'") and w.upper() != "AND"]
-        for w in words:
-            fts_parts.append(f'""{w}""')
-
-    fts_match = " AND ".join(fts_parts) if fts_parts else ""
-
-    for nt in neg_tokens:
-        clean_nt = nt.replace('"', '')
-        if fts_match:
-            fts_match += f' NOT ""{clean_nt}""'
-
-    clean_tokens = [w for w in pos_str.split() if w.upper() not in ("OR", "AND")] + exact_phrases
-
-    return {
-        "fts_match": fts_match,
-        "filetype": filetype,
-        "exact_phrases": exact_phrases,
-        "clean_tokens": [t.strip("(),:;\"'") for t in clean_tokens if t.strip("(),:;\"'")]
-    }
 
 def query_db(query, limit=50, offset=0, scope_file=None, scope_folder=None, mode="general"):
     if not os.path.exists(DB_PATH):
@@ -1799,47 +1632,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "data": box_data}).encode("utf-8"))
         elif parsed.path == "/api/dialog/pick-folder":
-            chosen = None
-            zenity_bin = shutil.which("zenity")
-            if zenity_bin:
-                try:
-                    res = subprocess.run(
-                        [zenity_bin, "--file-selection", "--directory", "--title=Select Folder to Index or Search"],
-                        capture_output=True, text=True, timeout=120, env=os.environ
-                    )
-                    if res.returncode == 0 and res.stdout.strip():
-                        chosen = res.stdout.strip()
-                except Exception as e:
-                    print(f"[ZENITY PICK FOLDER ERROR] {e}")
-            if not chosen and shutil.which("kdialog"):
-                try:
-                    res = subprocess.run(
-                        ["kdialog", "--getexistingdirectory", os.path.expanduser("~"), "--title", "Select Folder to Index"],
-                        capture_output=True, text=True, timeout=120, env=os.environ
-                    )
-                    if res.returncode == 0 and res.stdout.strip():
-                        chosen = res.stdout.strip()
-                except Exception:
-                    pass
+            chosen = pick_folder_dialog("Select Folder to Index or Search")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": bool(chosen), "path": chosen or ""}).encode("utf-8"))
         elif parsed.path == "/api/dialog/pick-file":
-            chosen = None
-            zenity_bin = shutil.which("zenity")
-            if zenity_bin:
-                try:
-                    res = subprocess.run(
-                        [zenity_bin, "--file-selection", "--title=Select File or Image to Index",
-                         "--file-filter=Supported Documents & Images | *.pdf *.docx *.xlsx *.xls *.png *.jpg *.jpeg *.webp *.txt *.csv",
-                         "--file-filter=All Files | *"],
-                        capture_output=True, text=True, timeout=120, env=os.environ
-                    )
-                    if res.returncode == 0 and res.stdout.strip():
-                        chosen = res.stdout.strip()
-                except Exception as e:
-                    print(f"[ZENITY PICK FILE ERROR] {e}")
+            chosen = pick_file_dialog("Select File or Image to Index")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
