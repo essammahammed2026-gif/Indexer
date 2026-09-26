@@ -453,22 +453,10 @@
 
     <!-- Search Hero Box -->
     <div class="search-container">
-      <!-- Search Mode Switcher (General Search default vs Telecom/CDR) -->
-      <div class="search-mode-row">
-        <div class="search-mode-pills">
-          <button id="modeBtnGeneral" class="mode-pill active" onclick="setSearchMode('general')" title="Universal full-text document search">
-            <span class="icon-slate" id="modeGeneralIcon"></span> General Search
-          </button>
-          <button id="modeBtnTelecom" class="mode-pill telecom-mode" onclick="setSearchMode('telecom')" title="Investigative phone & CDR records explorer">
-            <span class="icon-slate" id="modeTelecomIcon"></span> Telecom / CDR Mode
-          </button>
-        </div>
-        <span class="mode-desc-text" id="modeDescText">📄 Universal search across documents, PDFs, OCR, sheets & text</span>
-      </div>
 
       <div class="search-bar-row">
         <span class="search-icon-inside icon-slate" id="searchHeroIcon"></span>
-        <input type="text" id="queryInput" placeholder="Search keywords, Egyptian/EN names, phones, IDs, snippets, OCR images..." oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
+        <input type="text" id="queryInput" placeholder="Search text, phone (e.g. 010...), exact &quot;phrases&quot;, ext:pdf, folder:... (Ctrl+K)" oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
         <button id="clearSearchBtn" class="clear-btn" onclick="clearSearch()" title="Clear">
           <span class="icon-slate" id="clearSearchIcon"></span>
         </button>

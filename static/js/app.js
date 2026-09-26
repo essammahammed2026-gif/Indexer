@@ -54,11 +54,6 @@ function injectStaticIcons() {
   setIcon('tabGlobalIcon', SVG_RAW.globe);
   setIcon('tabScopedIcon', SVG_RAW.target);
 
-  setIcon('modeGeneralIcon', SVG_RAW.search);
-  setIcon('modeTelecomIcon', SVG_RAW.phone);
-  setIcon('scopedModeGeneralIcon', SVG_RAW.search);
-  setIcon('scopedModeTelecomIcon', SVG_RAW.phone);
-
   setIcon('searchHeroIcon', SVG_RAW.search);
   setIcon('clearSearchIcon', SVG_RAW.cross);
   setIcon('btnSearchIcon', SVG_RAW.search);
@@ -360,21 +355,7 @@ let currentViewMode = 'card';
 let debounceTimer = null;
 
 function setSearchMode(mode) {
-  currentSearchMode = mode;
-  const isGeneral = (mode === 'general');
-  document.getElementById('modeBtnGeneral').classList.toggle('active', isGeneral);
-  document.getElementById('modeBtnTelecom').classList.toggle('active', !isGeneral);
-
-  const desc = document.getElementById('modeDescText');
-  const input = document.getElementById('queryInput');
-  if (isGeneral) {
-    desc.innerText = '📄 Universal search across documents, PDFs, OCR, sheets & text';
-    input.placeholder = 'Search keywords, document text, topics, Egyptian/EN names, OCR images...';
-  } else {
-    desc.innerText = '📞 CDR caller, callee, tower cell, duration & phone intelligence';
-    input.placeholder = 'Search phone numbers (e.g. 010..., 2012...), caller/callee, IMEI/IMSI, cell towers...';
-  }
-
+  currentSearchMode = mode || 'general';
   if (currentQuery) {
     doSearch(0);
   }
@@ -1633,41 +1614,37 @@ function renderCards(rows) {
     const isImage = isImageFile(r.file);
 
     let metaRowHtml = '';
-    if (isGeneral) {
-      const folderDisplay = r.folder ? escapeHtml(r.folder) : '';
-      const sizeDisplay = r.size ? formatFileSize(r.size) : '';
-      metaRowHtml = `
-        <div class="general-card-meta">
-          ${folderDisplay ? `<span class="meta-tag" title="${folderDisplay}">${SVG_RAW.folder} ${folderDisplay.length > 55 ? '...' + folderDisplay.slice(-52) : folderDisplay}</span>` : ''}
-          ${r.sheet ? `<span class="meta-tag">${SVG_RAW.context} ${escapeHtml(r.sheet)} (Row ${r.row})</span>` : ''}
-          ${sizeDisplay ? `<span class="meta-tag">💾 ${sizeDisplay}</span>` : ''}
-          ${r.indexed_at && r.indexed_at !== '—' ? `<span class="meta-tag">📅 ${escapeHtml(r.indexed_at)}</span>` : ''}
-        </div>
-      `;
-    } else {
-      let pillsHtml = '';
-      if (r.target && r.target !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.target}', 'Target Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.target, currentQuery)}</b></span>`;
-      }
-      if (r.other && r.other !== '—') {
-        pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.other}', 'Party Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.other, currentQuery)}</b></span>`;
-      }
-      if (r.name && r.name !== '—') {
-        pillsHtml += `<span class="info-pill arabic" onclick="copyToClipboard('${r.name}', 'Name')">👤 <b>${highlightMatch(r.name, currentQuery)}</b></span>`;
-      }
-      if (r.time && r.time !== '—') {
-        pillsHtml += `<span class="info-pill">📅 ${escapeHtml(r.time)}</span>`;
-      }
-      if (r.dir && r.dir !== '—') {
-        pillsHtml += `<span class="info-pill">🔄 ${escapeHtml(r.dir)}</span>`;
-      }
-      if (r.address && r.address !== '—') {
-        pillsHtml += `<span class="info-pill arabic">📍 ${highlightMatch(r.address, currentQuery)}</span>`;
-      }
-      if (pillsHtml) {
-        metaRowHtml = `<div class="card-pill-group">${pillsHtml}</div>`;
-      }
+    const folderDisplay = r.folder ? escapeHtml(r.folder) : '';
+    const sizeDisplay = r.size ? formatFileSize(r.size) : '';
+    let pillsHtml = '';
+    if (r.target && r.target !== '—') {
+      pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.target}', 'Target Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.target, currentQuery)}</b></span>`;
     }
+    if (r.other && r.other !== '—') {
+      pillsHtml += `<span class="info-pill" onclick="copyToClipboard('${r.other}', 'Party Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.other, currentQuery)}</b></span>`;
+    }
+    if (r.name && r.name !== '—') {
+      pillsHtml += `<span class="info-pill arabic" onclick="copyToClipboard('${r.name}', 'Name')">👤 <b>${highlightMatch(r.name, currentQuery)}</b></span>`;
+    }
+    if (r.time && r.time !== '—') {
+      pillsHtml += `<span class="info-pill">📅 ${escapeHtml(r.time)}</span>`;
+    }
+    if (r.dir && r.dir !== '—') {
+      pillsHtml += `<span class="info-pill">🔄 ${escapeHtml(r.dir)}</span>`;
+    }
+    if (r.address && r.address !== '—') {
+      pillsHtml += `<span class="info-pill arabic">📍 ${highlightMatch(r.address, currentQuery)}</span>`;
+    }
+
+    metaRowHtml = `
+      <div class="general-card-meta">
+        ${folderDisplay ? `<span class="meta-tag" title="${folderDisplay}">${SVG_RAW.folder} ${folderDisplay.length > 55 ? '...' + folderDisplay.slice(-52) : folderDisplay}</span>` : ''}
+        ${r.sheet ? `<span class="meta-tag">${SVG_RAW.context} ${escapeHtml(r.sheet)} (Row ${r.row})</span>` : ''}
+        ${sizeDisplay ? `<span class="meta-tag">💾 ${sizeDisplay}</span>` : ''}
+        ${r.indexed_at && r.indexed_at !== '—' ? `<span class="meta-tag">📅 ${escapeHtml(r.indexed_at)}</span>` : ''}
+      </div>
+      ${pillsHtml ? `<div class="card-pill-group" style="margin-top:6px;">${pillsHtml}</div>` : ''}
+    `;
 
     card.innerHTML = `
       <div class="card-header">
@@ -1729,9 +1706,16 @@ function renderTableRows(rows) {
     `;
   }
 
+  thead.innerHTML = `
+    <th>File</th>
+    <th>Folder / Sheet</th>
+    <th>Snippet / Matched Content</th>
+    <th>Record Info</th>
+    <th>Actions</th>
+  `;
+
   if (!rows || rows.length === 0) {
-    const colspan = isGeneral ? 5 : 9;
-    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align:center; padding: 40px; color:#64748b;">No records match your query.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 40px; color:#64748b;">No records match your query.</td></tr>`;
     return;
   }
 
@@ -1740,52 +1724,41 @@ function renderTableRows(rows) {
     const escapedPath = (r.path || '').replace(/'/g, "\\'");
     const escapedSheet = (r.sheet || '').replace(/'/g, "\\'");
     const isImage = isImageFile(r.file);
+    const folderName = r.folder ? r.folder.split('/').slice(-2).join('/') : '';
 
-    if (isGeneral) {
-      const folderName = r.folder ? r.folder.split('/').slice(-2).join('/') : '';
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">
+    let extraPills = '';
+    if (r.target && r.target !== '—') extraPills += `<span class="info-pill" style="font-size:0.72rem; padding:1px 6px;" onclick="copyToClipboard('${r.target}', 'Target Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.target, currentQuery)}</b></span> `;
+    if (r.other && r.other !== '—') extraPills += `<span class="info-pill" style="font-size:0.72rem; padding:1px 6px;" onclick="copyToClipboard('${r.other}', 'Party Phone')">${SVG_RAW.phone} <b>${highlightMatch(r.other, currentQuery)}</b></span> `;
+    if (r.name && r.name !== '—') extraPills += `<span class="info-pill arabic" style="font-size:0.72rem; padding:1px 6px;" onclick="copyToClipboard('${r.name}', 'Name')">👤 <b>${highlightMatch(r.name, currentQuery)}</b></span> `;
+    if (r.time && r.time !== '—') extraPills += `<span class="info-pill" style="font-size:0.72rem; padding:1px 6px;">📅 ${escapeHtml(r.time)}</span> `;
+
+    tr.innerHTML = `
+      <td title="${escapeHtml(r.path)}">
+        <div style="display:flex; align-items:center; gap:6px;">
           ${getFileExtBadge(r.file)}
-          <span style="margin-left:5px; font-weight:600;">${escapeHtml(r.file)}</span>
-        </td>
-        <td style="color:#94a3b8; font-size:0.8rem;" title="${escapeHtml(r.folder || '')}">
-          <div>📁 ${escapeHtml(folderName || 'Root')}</div>
-          ${r.sheet ? `<div style="color:var(--text-dim); font-size:0.75rem;">${escapeHtml(r.sheet)} (Row ${r.row})</div>` : ''}
-        </td>
-        <td style="max-width: 520px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; line-height:1.45;">
-          ${highlightMatch(r.snippet, currentQuery)}
-        </td>
-        <td style="white-space:nowrap; color:#94a3b8; font-size:0.78rem;">
-          ${escapeHtml(r.indexed_at || r.time || '—')}
-        </td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open File">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="revealFolder('${escapedPath}')" title="Folder">${SVG_RAW.folder}</button>
-          </div>
-        </td>
-      `;
-    } else {
-      tr.innerHTML = `
-        <td title="${escapeHtml(r.path)}">${getFileExtBadge(r.file)} <span style="margin-left:4px;">${escapeHtml(r.file)}</span></td>
-        <td>${escapeHtml(r.time)}</td>
-        <td>${escapeHtml(r.dir)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.target}', 'Target Phone')">${highlightMatch(r.target, currentQuery)}</td>
-        <td style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.other}', 'Party Phone')">${highlightMatch(r.other, currentQuery)}</td>
-        <td class="arabic" style="font-weight:600; cursor:pointer;" onclick="copyToClipboard('${r.name}', 'Name')">${highlightMatch(r.name, currentQuery)}</td>
-        <td>${escapeHtml(r.duration)}</td>
-        <td class="arabic">${highlightMatch(r.address || r.sheet, currentQuery)}</td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
-            <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open">${SVG_RAW.open}</button>
-            <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
-          </div>
-        </td>
-      `;
-    }
+          <span style="font-weight:600;">${escapeHtml(r.file)}</span>
+        </div>
+        ${extraPills ? `<div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px;">${extraPills}</div>` : ''}
+      </td>
+      <td style="color:#94a3b8; font-size:0.8rem;" title="${escapeHtml(r.folder || '')}">
+        <div>📁 ${escapeHtml(folderName || 'Root')}</div>
+        ${r.sheet ? `<div style="color:var(--text-dim); font-size:0.75rem;">${escapeHtml(r.sheet)} (Row ${r.row})</div>` : ''}
+      </td>
+      <td style="max-width: 520px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; line-height:1.45;">
+        ${highlightMatch(r.snippet, currentQuery)}
+      </td>
+      <td style="white-space:nowrap; color:#94a3b8; font-size:0.78rem;">
+        ${escapeHtml(r.indexed_at || r.time || '—')}
+      </td>
+      <td>
+        <div style="display:flex; gap:4px;">
+          ${isImage ? `<button class="btn-action" style="padding:2px 6px; color:#a855f7;" onclick="showImagePreview('${escapedPath}', '${escapedSheet}', '${escapeHtml(currentQuery || '')}')" title="Preview Image">${SVG_RAW.eye}</button>` : ''}
+          <button class="btn-action" style="padding:2px 6px;" onclick="openFile('${escapedPath}', '${escapedSheet}', ${r.row})" title="Open File">${SVG_RAW.open}</button>
+          <button class="btn-action" style="padding:2px 6px;" onclick="showContextWindow('${escapedPath}', '${escapedSheet}', ${r.row})" title="Context">${SVG_RAW.context}</button>
+          <button class="btn-action" style="padding:2px 6px;" onclick="revealFolder('${escapedPath}')" title="Folder">${SVG_RAW.folder}</button>
+        </div>
+      </td>
+    `;
     tbody.appendChild(tr);
   });
 }
@@ -2154,4 +2127,24 @@ window.onload = () => {
   setInterval(() => {
     fetchNotifications();
   }, 5000);
+
+  // Global hotkeys: Ctrl+K or / focuses search; Esc closes modals
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA')) {
+      e.preventDefault();
+      const input = document.getElementById('queryInput');
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    } else if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+      const toolsDd = document.getElementById('toolsDropdown');
+      if (toolsDd) toolsDd.classList.remove('open');
+      const notifDd = document.getElementById('notifDropdown');
+      if (notifDd) notifDd.classList.remove('open');
+      const dbDd = document.getElementById('dbDropdown');
+      if (dbDd) dbDd.classList.remove('open');
+    }
+  });
 };

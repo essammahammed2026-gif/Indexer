@@ -24,12 +24,32 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
         conn.close()
         return {"rows": [], "total": 0, "limit": limit, "offset": offset, "mode": mode}
 
-    norm_p = normalize_phone(query)
+    # 1. Parse Google-style search operators upfront
+    parsed_q = parse_google_query(query)
+    fts_expr = parsed_q["fts_match"]
+    filetype_filter = parsed_q["filetype"]
+    phone_filter = parsed_q.get("phone_filter")
+    folder_filter = parsed_q.get("folder_filter")
+    exact_phrases = parsed_q["exact_phrases"]
+    clean_tokens = parsed_q["clean_tokens"]
+
+    norm_p = normalize_phone(phone_filter or query)
     norm_a = normalize_arabic(query)
     pattern = f"%{query}%"
 
     # Extract clean digits for partial number matching
-    digits_only = re.sub(r'\D', '', query)
+    digits_only = re.sub(r'\D', '', phone_filter or query)
+
+    # Detect if query is inherently a telecom search (phone number, prefix query, or phone filter)
+    is_telecom_detected = bool(
+        mode == "telecom"
+        or phone_filter
+        or query.lower().startswith("prefix:")
+        or (digits_only and (
+            (len(digits_only) in (3, 4) and digits_only.startswith("01")) or
+            (len(digits_only) >= 8 and (digits_only.startswith("01") or digits_only.startswith("201") or digits_only.startswith("00201")))
+        ))
+    )
 
     scope_clause_cdr = ""
     scope_params_cdr = []
@@ -41,15 +61,22 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
         scope_params_cdr.append(scope_file)
         scope_clause_fts = " AND u.file_path = ? "
         scope_params_fts.append(scope_file)
-    elif scope_folder:
-        clean_fld = os.path.abspath(scope_folder)
-        scope_clause_cdr = " AND (f.folder = ? OR f.file_path LIKE ?) "
-        scope_params_cdr.extend([clean_fld, f"{clean_fld}%"])
-        scope_clause_fts = " AND (f.folder = ? OR u.file_path LIKE ?) "
-        scope_params_fts.extend([clean_fld, f"{clean_fld}%"])
+    elif scope_folder or folder_filter:
+        target_fld = folder_filter or scope_folder
+        clean_fld = os.path.abspath(target_fld) if os.path.isabs(target_fld) else f"%{target_fld}%"
+        if os.path.isabs(target_fld):
+            scope_clause_cdr = " AND (f.folder = ? OR f.file_path LIKE ?) "
+            scope_params_cdr.extend([clean_fld, f"{clean_fld}%"])
+            scope_clause_fts = " AND (f.folder = ? OR u.file_path LIKE ?) "
+            scope_params_fts.extend([clean_fld, f"{clean_fld}%"])
+        else:
+            scope_clause_cdr = " AND (f.folder LIKE ? OR f.file_path LIKE ?) "
+            scope_params_cdr.extend([clean_fld, clean_fld])
+            scope_clause_fts = " AND (f.folder LIKE ? OR u.file_path LIKE ?) "
+            scope_params_fts.extend([clean_fld, clean_fld])
 
-    # Prefix search for Telecom mode
-    if mode == "telecom" and (query.lower().startswith("prefix:") or (query.isdigit() and len(query) in (3, 4) and query.startswith("01"))):
+    # Prefix search for Telecom
+    if is_telecom_detected and (query.lower().startswith("prefix:") or (digits_only and len(digits_only) in (3, 4) and digits_only.startswith("01"))):
         prefix_val = query.replace("prefix:", "").strip()
         norm_pfx = normalize_phone(prefix_val) if len(prefix_val) > 2 else prefix_val
         pfx_pat = f"{norm_pfx}%"
@@ -86,7 +113,7 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
         return {"type": "prefix", "rows": results, "total": total_cnt, "limit": limit, "offset": offset, "mode": mode}
 
     # MODE A: TELECOM CDR SEARCH (With partial number, substring & fuzzy matching)
-    if mode == "telecom":
+    if mode == "telecom" or is_telecom_detected:
         cdr_partial_sql = ""
         cdr_partial_params = []
         if len(digits_only) >= 4:
@@ -231,13 +258,6 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
             return {"type": "cdr", "rows": cdr_rows, "total": total_count, "limit": limit, "offset": offset, "mode": mode}
 
     # MODE B: GENERAL SEARCH (DEFAULT)
-    # 1. Parse Google-style search operators
-    parsed_q = parse_google_query(query)
-    fts_expr = parsed_q["fts_match"]
-    filetype_filter = parsed_q["filetype"]
-    exact_phrases = parsed_q["exact_phrases"]
-    clean_tokens = parsed_q["clean_tokens"]
-
     filetype_clause_fts = ""
     filetype_params_fts = []
     if filetype_filter:

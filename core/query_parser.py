@@ -22,12 +22,31 @@ def parse_google_query(raw_query):
     if not clean:
         return {"fts_match": "", "filetype": None, "exact_phrases": [], "clean_tokens": []}
 
-    # 1. filetype:ext
+    # 1. filetype:ext or ext:extension
     filetype = None
-    ft_m = re.search(r"\bfiletype:([a-zA-Z0-9]+)\b", clean, re.IGNORECASE)
+    ft_m = re.search(r"\b(?:filetype|ext):([a-zA-Z0-9]+)\b", clean, re.IGNORECASE)
     if ft_m:
         filetype = ft_m.group(1).lower().strip()
-        clean = re.sub(r"\bfiletype:[a-zA-Z0-9]+\b", " ", clean, flags=re.IGNORECASE).strip()
+        clean = re.sub(r"\b(?:filetype|ext):[a-zA-Z0-9]+\b", " ", clean, flags=re.IGNORECASE).strip()
+
+    # Explicit phone:number operator
+    phone_filter = None
+    ph_m = re.search(r"\bphone:([0-9\+\-]+)\b", clean, re.IGNORECASE)
+    if ph_m:
+        phone_filter = ph_m.group(1).strip()
+        clean = re.sub(r"\bphone:[0-9\+\-]+\b", " ", clean, flags=re.IGNORECASE).strip()
+
+    # folder:folder_name or dir:directory (quoted or single token)
+    folder_filter = None
+    dir_m = re.search(r"\b(?:folder|dir):\"([^\"]+)\"", clean, re.IGNORECASE)
+    if dir_m:
+        folder_filter = dir_m.group(1).strip()
+        clean = re.sub(r"\b(?:folder|dir):\"[^\"]+\"", " ", clean, flags=re.IGNORECASE).strip()
+    else:
+        dir_m = re.search(r"\b(?:folder|dir):([^\s]+)", clean, re.IGNORECASE)
+        if dir_m:
+            folder_filter = dir_m.group(1).strip()
+            clean = re.sub(r"\b(?:folder|dir):[^\s]+", " ", clean, flags=re.IGNORECASE).strip()
 
     # 2. Extract exact phrases in quotes "..."
     exact_phrases = [p.strip() for p in re.findall(r"\"([^\"]+)\"", clean) if p.strip()]
@@ -80,6 +99,8 @@ def parse_google_query(raw_query):
     return {
         "fts_match": fts_match,
         "filetype": filetype,
+        "phone_filter": phone_filter,
+        "folder_filter": folder_filter,
         "exact_phrases": exact_phrases,
         "clean_tokens": [t.strip("(),:;\"'") for t in clean_tokens if t.strip("(),:;\"'")]
     }

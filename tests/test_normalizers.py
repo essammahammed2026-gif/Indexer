@@ -35,5 +35,11 @@ class TestCoreDomain(unittest.TestCase):
         self.assertIn("cairo tower", res["exact_phrases"])
         self.assertTrue('NOT ""confidential""' in res["fts_match"])
 
+        res2 = parse_google_query('ext:xlsx phone:01002407192 folder:Finance budget')
+        self.assertEqual(res2["filetype"], "xlsx")
+        self.assertEqual(res2["phone_filter"], "01002407192")
+        self.assertEqual(res2["folder_filter"], "Finance")
+        self.assertIn("budget", res2["clean_tokens"])
+
 if __name__ == "__main__":
     unittest.main()
