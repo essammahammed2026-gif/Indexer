@@ -2163,16 +2163,23 @@ window.onload = () => {
     fetchNotifications();
   }, 5000);
 
-  // Global hotkeys: Ctrl+K or / focuses search; Esc closes modals
+  let selectedResultIdx = -1;
+
+  // Global hotkeys: Ctrl+K or / focuses search; Esc closes modals; Up/Down arrows navigate results
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA')) {
+    const isEditing = (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+
+    if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && !isEditing)) {
       e.preventDefault();
       const input = document.getElementById('queryInput');
       if (input) {
         input.focus();
         input.select();
       }
-    } else if (e.key === 'Escape') {
+      return;
+    }
+
+    if (e.key === 'Escape') {
       document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
       const toolsDd = document.getElementById('toolsDropdown');
       if (toolsDd) toolsDd.classList.remove('open');
@@ -2180,6 +2187,37 @@ window.onload = () => {
       if (notifDd) notifDd.classList.remove('open');
       const dbDd = document.getElementById('dbDropdown');
       if (dbDd) dbDd.classList.remove('open');
+      return;
+    }
+
+    // Arrow keys navigation for results when not typing inside an input
+    const isCards = (currentViewMode === 'card');
+    const items = isCards
+      ? Array.from(document.querySelectorAll('.result-card'))
+      : Array.from(document.querySelectorAll('#tableBody tr'));
+
+    if (items.length > 0 && (!isEditing || document.activeElement.id === 'queryInput')) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        items.forEach(el => el.classList.remove('kb-selected'));
+        selectedResultIdx = Math.min(selectedResultIdx + 1, items.length - 1);
+        if (selectedResultIdx >= 0 && items[selectedResultIdx]) {
+          items[selectedResultIdx].classList.add('kb-selected');
+          items[selectedResultIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        items.forEach(el => el.classList.remove('kb-selected'));
+        selectedResultIdx = Math.max(selectedResultIdx - 1, 0);
+        if (selectedResultIdx >= 0 && items[selectedResultIdx]) {
+          items[selectedResultIdx].classList.add('kb-selected');
+          items[selectedResultIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      } else if (e.key === 'Enter' && !isEditing && selectedResultIdx >= 0 && items[selectedResultIdx]) {
+        // Trigger primary action (Open or Context) on selected row
+        const openBtn = items[selectedResultIdx].querySelector('button[title*="Open"]') || items[selectedResultIdx].querySelector('.btn-action');
+        if (openBtn) openBtn.click();
+      }
     }
   });
 };

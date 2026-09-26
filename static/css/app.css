@@ -1042,6 +1042,15 @@
     vertical-align: middle;
   }
   tr:hover td { background: #1e293b40; }
+  tr.kb-selected td {
+    background: rgba(56, 189, 248, 0.15) !important;
+    border-color: rgba(56, 189, 248, 0.4);
+  }
+  .result-card.kb-selected {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    background: var(--bg-card-hover);
+  }
 
   /* Custom Dark Scrollbar */
   ::-webkit-scrollbar {
