@@ -194,6 +194,7 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
             processed_any = False
             total_count = len(files_to_process)
             INDEX_STATE["total"] = total_count
+            completed_count = 0
 
             # Determine optimal parallel worker count (cap at 6 to avoid CPU starvation)
             max_workers = max(1, min(cpu_count(), 6))
@@ -223,9 +224,9 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
 
                         orig_fpath = future_to_file[future]
                         fname = os.path.basename(orig_fpath)
-                        processed_idx = chunk_start + list(future_to_file.keys()).index(future) + 1
+                        completed_count += 1
 
-                        INDEX_STATE["current"] = min(processed_idx, total_count)
+                        INDEX_STATE["current"] = min(completed_count, total_count)
                         INDEX_STATE["current_file"] = fname
                         INDEX_STATE["percent"] = round((INDEX_STATE["current"] / max(total_count, 1)) * 100, 1)
                         INDEX_STATE["status_message"] = f"Indexing file {INDEX_STATE['current']} of {total_count} ({max_workers} cores)"

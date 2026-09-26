@@ -56,5 +56,10 @@ class TestWebRouter(unittest.TestCase):
         self.assertEqual(handler.status, 404)
         self.assertEqual(handler.wfile.data, b"Not Found")
 
+    def test_query_string_route_match(self):
+        handler = DummyHandler("/api/ping?q=test&limit=10")
+        self.router.dispatch(handler, "GET")
+        self.assertEqual(handler.wfile.data, b"pong")
+
 if __name__ == "__main__":
     unittest.main()

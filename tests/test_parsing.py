@@ -118,6 +118,19 @@ class TestDocumentParser(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][2][0], "Unified dispatcher works")
 
+    def test_parse_zip(self):
+        zip_path = os.path.join(self.test_dir.name, "test_archive.zip")
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("notes.txt", "Archive Line 1\nArchive Line 2")
+            zf.writestr("ignored.bin", b"\x00\x01\x02")
+
+        rows = parse_document(zip_path)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "notes.txt")
+        self.assertEqual(rows[0][1], 1)
+        self.assertEqual(rows[0][2][0], "Archive Line 1")
+        self.assertEqual(rows[1][2][0], "Archive Line 2")
+
 
 if __name__ == "__main__":
     unittest.main()

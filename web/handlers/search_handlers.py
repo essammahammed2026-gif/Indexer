@@ -65,11 +65,12 @@ def handle_search_csv(handler, parsed):
     output = io.StringIO()
     writer = csv.writer(output)
 
-    if mode_val == "telecom" and data.get("type") == "prefix":
+    dtype = data.get("type")
+    if dtype == "prefix":
         writer.writerow(["Phone", "Name", "Total Matches", "Matched Files"])
         for r in rows:
             writer.writerow([r.get("phone", ""), r.get("name", ""), r.get("count", 0), r.get("files", "")])
-    elif mode_val == "telecom":
+    elif dtype == "cdr" or mode_val == "telecom":
         writer.writerow(["File", "Sheet", "Row", "Time", "Direction", "Target MSISDN", "Other Party", "Name", "Duration", "Other ID", "Address", "Cell"])
         for r in rows:
             writer.writerow([
