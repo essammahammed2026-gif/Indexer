@@ -23,7 +23,12 @@ from .handlers.database_handlers import (
     handle_delete_database,
     handle_import_database
 )
-from .handlers.settings_handlers import handle_get_settings, handle_save_settings
+from .handlers.settings_handlers import (
+    handle_get_settings,
+    handle_save_settings,
+    handle_init_storage,
+    handle_reset_app
+)
 from .handlers.bookmark_handlers import (
     handle_get_bookmarks,
     handle_add_bookmark,
@@ -84,6 +89,8 @@ def create_router():
     # Settings
     router.add_route("GET", "/api/settings", handle_get_settings)
     router.add_route("POST", "/api/settings/save", handle_save_settings)
+    router.add_route("POST", "/api/settings/init_storage", handle_init_storage)
+    router.add_route("POST", "/api/settings/reset", handle_reset_app)
 
     # Bookmarks
     router.add_route("GET", "/api/bookmarks", handle_get_bookmarks)

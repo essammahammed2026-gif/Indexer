@@ -21,16 +21,21 @@ from services import (
 from ..http_utils import read_json_body, send_json, send_success, send_error
 
 def handle_list_databases(handler, parsed):
-    storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
+    storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
+    needs_setup = not bool(storage_dir and os.path.isdir(storage_dir))
+    if storage_dir and os.path.isdir(storage_dir):
+        from .settings_handlers import discover_databases_in_dir
+        discover_databases_in_dir(storage_dir)
+
     active_key = APP_CONFIG.get("active_db", "")
     db_list = []
     for db_key, meta in APP_CONFIG.get("databases", {}).items():
-        fname = meta.get("filename", "sheets_index.db")
-        fpath = os.path.join(storage_dir, fname)
+        fname = meta.get("filename", "")
+        fpath = os.path.join(storage_dir, fname) if storage_dir and fname else ""
         fsize = 0
         records = 0
         files_count = 0
-        exists = os.path.exists(fpath)
+        exists = bool(fpath and os.path.exists(fpath))
         if exists:
             try:
                 fsize = os.path.getsize(fpath)
@@ -57,7 +62,7 @@ def handle_list_databases(handler, parsed):
             "created_at": meta.get("created_at", ""),
             "is_active": (db_key == active_key and bool(active_key))
         })
-    send_success(handler, databases=db_list, active_db=active_key, db_storage_dir=storage_dir)
+    send_success(handler, databases=db_list, active_db=active_key, db_storage_dir=storage_dir, needs_setup=needs_setup)
 
 def handle_switch_database(handler, parsed):
     data, err = read_json_body(handler)
@@ -108,6 +113,11 @@ def handle_create_database(handler, parsed):
     if err:
         send_error(handler, err, 400)
         return
+    storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
+    if not storage_dir or not os.path.isdir(storage_dir):
+        send_error(handler, "Index storage directory is not configured. Please configure a storage folder first.", 400)
+        return
+
     nickname = (data or {}).get("nickname", "").strip() or "New Database"
     folder = (data or {}).get("folder", "").strip()
     db_id = re.sub(r'[^a-zA-Z0-9_]', '_', nickname.lower()).strip('_')
@@ -150,9 +160,9 @@ def handle_delete_database(handler, parsed):
         return
 
     meta = dbs.pop(target_id)
-    storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
-    fpath = os.path.join(storage_dir, meta.get("filename", ""))
-    if delete_file and os.path.exists(fpath):
+    storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
+    fpath = os.path.join(storage_dir, meta.get("filename", "")) if storage_dir and meta.get("filename") else ""
+    if delete_file and fpath and os.path.exists(fpath):
         try:
             os.remove(fpath)
             for suff in ["-wal", "-shm"]:

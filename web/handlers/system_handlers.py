@@ -174,8 +174,10 @@ def handle_index_start(handler, parsed):
             db_id = f"db_{int(time.time())}"
         if db_id in APP_CONFIG.get("databases", {}):
             db_id = f"{db_id}_{int(time.time())}"
-        fname = f"indexer_{db_id}.db"
-        storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
+        storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
+        if not storage_dir or not os.path.isdir(storage_dir):
+            send_error(handler, "Index storage directory is not configured. Please configure a storage folder first.", 400)
+            return
         target_db_path = os.path.join(storage_dir, fname)
 
         APP_CONFIG["databases"][db_id] = {

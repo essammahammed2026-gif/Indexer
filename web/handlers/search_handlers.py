@@ -20,13 +20,14 @@ from ..http_utils import read_json_body, send_json, send_error, send_success
 def handle_stats(handler, parsed):
     active_key = APP_CONFIG.get("active_db", "")
     db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
-    nickname = db_meta.get("nickname", "No Database Loaded" if not active_key else "Main Database")
-    storage_dir = APP_CONFIG.get("db_storage_dir", BASE_DIR)
+    nickname = db_meta.get("nickname", "No Database Loaded")
+    storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
     folder = WATCHER_CONFIG.get("folder", "")
     active_path = get_active_db_path()
     res = storage.get_stats(active_path, folder=folder, active_key=active_key, nickname=nickname, storage_dir=storage_dir)
     res["watcher"] = WATCHER_CONFIG.get("active", False)
     res["has_active_db"] = bool(active_key and active_path and os.path.exists(active_path))
+    res["needs_setup"] = not bool(storage_dir and os.path.isdir(storage_dir))
     send_json(handler, res)
 
 def handle_search(handler, parsed):

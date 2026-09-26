@@ -55,11 +55,10 @@ python3 -m py_compile app.py indexer_engine.py index_sheets.py search.py
   ```
 - Backups are stored as `sheets_index.db.snap_YYYYMMDD`.
 
-## 6. Modular Refactoring & Regression Testing Workflow
-- Refer to [`REFACTORING_RUNBOOK.md`](file:///home/essam/Projects/Indexer/REFACTORING_RUNBOOK.md) for master checklists and phase execution.
-- Run automated unit and regression tests:
+## 6. Verification & Quality Assurance Workflow
+- Verify Python syntax across all modules:
   ```bash
-  python3 -m unittest discover tests/
+  python3 -m py_compile $(find . -name "*.py")
   ```
 - Verify web endpoints return `200 OK`:
   ```bash
@@ -75,10 +74,9 @@ Follow these steps whenever a task asks to add, edit, or remove a feature:
 2. **Follow the Route Dispatcher Pattern**:
    - Register endpoints in `web/routes.py`.
    - Implement handlers in `web/handlers/` using `web.http_utils.send_json` and `read_json_body`.
-3. **Verify with Full Suite**:
+3. **Verify Syntax**:
    ```bash
-   python3 -m py_compile app.py core/*.py storage/*.py parsing/*.py services/*.py web/*.py web/handlers/*.py
-   python3 -m unittest discover tests/
+   python3 -m py_compile $(find . -name "*.py")
    ```
 4. **Smoke Test Web GUI**:
    - Ensure the server starts clean (`python3 -u app.py`) and responds to HTTP requests.

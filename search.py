@@ -14,25 +14,9 @@ import storage
 
 def main():
     load_config()
-    db_path = get_active_db_path()
-
-    if not db_path or not os.path.exists(db_path):
-        from services.state import APP_CONFIG, BASE_DIR
-        storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
-        for key, meta in APP_CONFIG.get("databases", {}).items():
-            candidate = os.path.join(storage_dir, meta.get("filename", ""))
-            if os.path.exists(candidate):
-                db_path = candidate
-                break
-        if not db_path and os.path.exists(os.path.join(BASE_DIR, "sheets_index.db")):
-            db_path = os.path.join(BASE_DIR, "sheets_index.db")
-
-    if not db_path or not os.path.exists(db_path):
-        print(f"Error: Database index '{db_path}' not found. Please index documents first.")
-        sys.exit(1)
-
     parser = argparse.ArgumentParser(description="Instant search across indexed CDR and documents.")
     parser.add_argument("query", nargs="?", help="Search query (phone number, name, ID, or keyword)")
+    parser.add_argument("--db", help="Specify database ID, nickname, filename, or direct SQLite file path")
     parser.add_argument("--phone", "-p", help="Search by phone number")
     parser.add_argument("--name", "-n", help="Search by contact name")
     parser.add_argument("--id", "-i", help="Search by National ID / Sub ID")
@@ -42,6 +26,31 @@ def main():
     parser.add_argument("--open", "-o", action="store_true", help="Open first matching result in Calc or default app")
 
     args = parser.parse_args()
+
+    db_path = get_active_db_path()
+    if args.db:
+        from services.state import APP_CONFIG
+        storage_dir = APP_CONFIG.get("db_storage_dir", "")
+        # Check by database ID or filename
+        found = False
+        for k, meta in APP_CONFIG.get("databases", {}).items():
+            if args.db.lower() in (k.lower(), meta.get("filename", "").lower(), meta.get("nickname", "").lower()):
+                candidate = os.path.join(storage_dir, meta.get("filename", ""))
+                if os.path.exists(candidate):
+                    db_path = candidate
+                    found = True
+                    break
+        if not found:
+            # Check direct or relative path
+            candidate = os.path.abspath(args.db)
+            if os.path.exists(candidate):
+                db_path = candidate
+            elif storage_dir and os.path.exists(os.path.join(storage_dir, args.db)):
+                db_path = os.path.join(storage_dir, args.db)
+
+    if not db_path or not os.path.exists(db_path):
+        print("Error: No database loaded. Please select an active database in the app or specify --db <name/path>.")
+        sys.exit(1)
 
     mode = "general"
     q = ""

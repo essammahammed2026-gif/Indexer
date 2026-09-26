@@ -6,13 +6,15 @@ Zero external pip dependencies.
 import os
 import json
 import time
+import tempfile
 import sqlite3
 import threading
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+TEMP_UPLOADS_DIR = os.path.join(tempfile.gettempdir(), "indexer_uploads")
+os.makedirs(TEMP_UPLOADS_DIR, exist_ok=True)
+UPLOADS_DIR = TEMP_UPLOADS_DIR  # Backward-compatibility alias
 
 # Global indexing lock for concurrency control
 INDEX_LOCK = threading.Lock()
@@ -37,18 +39,11 @@ INDEX_STATE = {
 }
 
 # Multi-Database & Watcher App Configuration
+# Clean defaults: starts with no database loaded and no hardcoded fallback storage
 APP_CONFIG = {
-    "db_storage_dir": BASE_DIR,
+    "db_storage_dir": "",
     "active_db": "",
-    "databases": {
-        "default": {
-            "nickname": "Main Database",
-            "filename": "sheets_index.db",
-            "watch_folder": "",
-            "watch_active": False,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-    },
+    "databases": {},
     "watcher_settings": {
         "poll_interval_seconds": 3,
         "debounce_delay_seconds": 2.0,
@@ -64,18 +59,23 @@ WATCHER_CONFIG = {
 }
 
 def get_active_db_path():
-    """Compute absolute file path to the active SQLite database file, or '' if none loaded."""
+    """
+    Compute absolute file path to the active SQLite database file.
+    Returns '' if no database is loaded or if the file does not exist.
+    Strictly NO fallbacks to default databases or application directory.
+    """
     active_key = APP_CONFIG.get("active_db")
     if not active_key or active_key not in APP_CONFIG.get("databases", {}):
         return ""
-    storage_dir = APP_CONFIG.get("db_storage_dir") or BASE_DIR
-    try:
-        os.makedirs(storage_dir, exist_ok=True)
-    except Exception:
-        storage_dir = BASE_DIR
+    storage_dir = (APP_CONFIG.get("db_storage_dir") or "").strip()
+    if not storage_dir or not os.path.isdir(storage_dir):
+        return ""
     db_meta = APP_CONFIG.get("databases", {}).get(active_key, {})
-    fname = db_meta.get("filename") or "sheets_index.db"
-    return os.path.join(storage_dir, fname)
+    fname = db_meta.get("filename") or ""
+    if not fname:
+        return ""
+    target = os.path.join(storage_dir, fname)
+    return target if os.path.exists(target) else ""
 
 def sync_active_db_vars():
     """Keep DB_PATH and WATCHER_CONFIG in sync with the active database profile."""
@@ -91,48 +91,41 @@ def sync_active_db_vars():
         WATCHER_CONFIG["active"] = False
 
 def load_config(startup=False):
-    """Load configuration from config.json with migration support."""
+    """
+    Load configuration from config.json.
+    Always initializes with active_db = '' (never auto-loads on startup).
+    """
     global APP_CONFIG, WATCHER_CONFIG, DB_PATH
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if "watch_folder" in data and "databases" not in data:
-                old_folder = data.get("watch_folder", "")
-                old_active = data.get("watch_active", False)
-                APP_CONFIG["databases"]["default"]["watch_folder"] = old_folder
-                APP_CONFIG["databases"]["default"]["watch_active"] = old_active
-                if old_folder:
-                    APP_CONFIG["databases"]["default"]["nickname"] = os.path.basename(old_folder.rstrip('/')) or "Main Database"
-            else:
-                if "db_storage_dir" in data:
-                    APP_CONFIG["db_storage_dir"] = data["db_storage_dir"]
-                if "databases" in data and isinstance(data["databases"], dict) and data["databases"]:
-                    APP_CONFIG["databases"] = data["databases"]
-                if "watcher_settings" in data and isinstance(data["watcher_settings"], dict):
-                    APP_CONFIG["watcher_settings"].update(data["watcher_settings"])
-                if startup:
-                    APP_CONFIG["active_db"] = ""
-                elif "active_db" in data:
-                    APP_CONFIG["active_db"] = data["active_db"]
+            if "db_storage_dir" in data:
+                APP_CONFIG["db_storage_dir"] = data["db_storage_dir"]
+            if "databases" in data and isinstance(data["databases"], dict):
+                APP_CONFIG["databases"] = data["databases"]
+            if "watcher_settings" in data and isinstance(data["watcher_settings"], dict):
+                APP_CONFIG["watcher_settings"].update(data["watcher_settings"])
+            # The app must ALWAYS start with no database loaded
+            APP_CONFIG["active_db"] = ""
             sync_active_db_vars()
         except Exception as e:
             print(f"[CONFIG] Error loading config: {e}")
+            APP_CONFIG["active_db"] = ""
             sync_active_db_vars()
     else:
-        if startup:
-            APP_CONFIG["active_db"] = ""
+        APP_CONFIG["active_db"] = ""
         sync_active_db_vars()
 
 def save_config():
-    """Persist current configuration to config.json."""
+    """Persist current configuration to config.json with active_db always unset."""
     try:
         active_key = APP_CONFIG.get("active_db", "")
         if active_key and active_key in APP_CONFIG.get("databases", {}):
             APP_CONFIG["databases"][active_key]["watch_folder"] = WATCHER_CONFIG.get("folder", "")
             APP_CONFIG["databases"][active_key]["watch_active"] = WATCHER_CONFIG.get("active", False)
         payload = dict(APP_CONFIG)
-        payload["active_db"] = ""
+        payload["active_db"] = ""  # Never persist an auto-loaded database
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
     except Exception as e:

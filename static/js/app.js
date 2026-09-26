@@ -466,6 +466,9 @@ async function refreshStats() {
   try {
     const res = await fetch('/api/stats');
     const data = await res.json();
+    if (data.needs_setup) {
+      openStorageSetupModal(data.db_storage_dir || '');
+    }
     const statsBadge = document.getElementById('statsBadge');
     const fldEl = document.getElementById('currentFolderText');
     const fldTag = document.getElementById('currentFolderTag');
@@ -552,6 +555,9 @@ async function loadDatabases() {
   try {
     const res = await fetch('/api/databases');
     const data = await res.json();
+    if (data.needs_setup) {
+      openStorageSetupModal(data.db_storage_dir || '');
+    }
     if (data.ok) {
       cachedDatabases = data.databases || [];
       renderDbDropdownList(cachedDatabases, data.active_db);
@@ -832,6 +838,98 @@ async function loadSkippedFiles() {
 function closeSettingsModal() {
   const modal = document.getElementById('settingsModal');
   if (modal) modal.classList.remove('active');
+}
+
+// First-Launch Storage Setup Management
+function openStorageSetupModal(currentPath = '') {
+  const modal = document.getElementById('storageSetupModal');
+  if (!modal) return;
+  const input = document.getElementById('setupStorageDirInput');
+  if (input && currentPath) input.value = currentPath;
+  modal.classList.add('active');
+}
+
+function closeStorageSetupModal() {
+  const modal = document.getElementById('storageSetupModal');
+  if (modal) modal.classList.remove('active');
+}
+
+async function pickSetupStorageDirNative() {
+  try {
+    const res = await fetch('/api/dialog/pick-folder');
+    const data = await res.json();
+    if (data.ok && data.path) {
+      document.getElementById('setupStorageDirInput').value = data.path;
+      showToast(`Selected folder: ${data.path}`);
+    }
+  } catch (err) {
+    showToast("❌ Could not open folder chooser");
+  }
+}
+
+async function submitSetupStorageDir() {
+  const input = document.getElementById('setupStorageDirInput');
+  const folder = (input?.value || '').trim();
+  if (!folder) {
+    alert("Please select or enter a storage folder path.");
+    return;
+  }
+  const btn = document.getElementById('btnConfirmStorageSetup');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/settings/init_storage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      closeStorageSetupModal();
+      showToast(`✅ ${data.message || "Storage directory configured!"}`);
+      await loadDatabases();
+      await refreshStats();
+      if (data.discovered_count > 0) {
+        showToast(`🎉 Found and registered ${data.discovered_count} existing index database(s)!`);
+      }
+    } else {
+      alert(`Error configuring storage: ${data.error}`);
+    }
+  } catch (err) {
+    showToast("❌ Network error configuring storage");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function confirmResetApp() {
+  const confirmed = confirm(
+    "⚠️ WARNING: Are you sure you want to reset the application?\n\n" +
+    "This will clear all application configuration, active database selections, and watcher settings.\n\n" +
+    "Your index databases on disk will NOT be deleted, but the application will return to the initial setup screen.\n\n" +
+    "Do you want to proceed?"
+  );
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch('/api/settings/reset', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      closeSettingsModal();
+      showToast("🔄 Application reset to initial state.");
+      cachedDatabases = [];
+      const activeNameEl = document.getElementById('activeDbName');
+      const activePill = document.querySelector('.db-switch-pill');
+      if (activeNameEl) activeNameEl.innerText = "Select Index (Empty)";
+      if (activePill) activePill.classList.add('no-db');
+      renderInitialEmptyState();
+      openStorageSetupModal();
+    } else {
+      alert(`Reset error: ${data.error}`);
+    }
+  } catch (err) {
+    showToast("❌ Network error resetting application");
+  }
 }
 
 async function pickStorageDirNative() {

@@ -48,6 +48,42 @@
     </div>
   </div>
 
+  <!-- First-Launch Storage Setup Modal -->
+  <div id="storageSetupModal" class="modal-overlay" style="z-index: 10000;">
+    <div class="modal-content" style="max-width: 620px; border-color: rgba(99, 102, 241, 0.4); box-shadow: 0 20px 40px -10px rgba(0,0,0,0.8), 0 0 50px rgba(99, 102, 241, 0.15);">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px;">
+        <span class="icon-slate icon-lg" id="setupModalLogoIcon" style="font-size: 1.8rem;">🗄️</span>
+        <div>
+          <h3 style="margin:0; font-size:1.2rem; color:#f8fafc;">Welcome to OmniSearch</h3>
+          <p style="margin:2px 0 0 0; font-size:0.8rem; color:var(--text-muted);">Initial Index Storage Configuration</p>
+        </div>
+      </div>
+
+      <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6; margin-bottom: 14px;">
+        Please choose the directory where all indexed SQLite database files will be stored. You can select an empty folder for new databases, or select a directory where you <b>already have index databases from previous installations</b>.
+      </p>
+
+      <div style="background:var(--bg-primary); border:1px solid var(--border-subtle); border-radius:8px; padding:12px; margin-bottom: 14px;">
+        <label style="display:block; font-size:0.8rem; font-weight:600; color:#f1f5f9; margin-bottom:6px;">
+          📁 Index Databases Storage Folder:
+        </label>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="setupStorageDirInput" class="settings-input" style="flex:1; font-family:'JetBrains Mono', monospace;" placeholder="/home/username/IndexerDatabases">
+          <button class="btn-header" onclick="pickSetupStorageDirNative()" title="Browse for folder using native chooser">Browse...</button>
+        </div>
+        <div style="font-size:0.75rem; color:var(--text-dim); margin-top:6px;">
+          💡 Any existing <code>.db</code> files found in this folder will be automatically detected and registered.
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top: 16px;">
+        <button class="btn-header primary" id="btnConfirmStorageSetup" onclick="submitSetupStorageDir()" style="width:100%; justify-content:center; padding:10px 16px; font-size:0.9rem;">
+          Confirm Storage Folder & Continue →
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Menu Modal -->
   <div id="settingsModal" class="modal-overlay">
     <div class="modal-content" style="max-width: 650px;">
@@ -137,6 +173,21 @@
         <div class="settings-desc">Files that could not be parsed (e.g. password protected or unsupported format) during indexing.</div>
         <div id="settingsSkippedFilesList" style="max-height: 140px; overflow-y: auto; background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:6px; font-size:0.78rem; font-family:'JetBrains Mono', monospace;">
           <div style="padding:10px; text-align:center; color:var(--text-dim);">No skipped files recorded.</div>
+        </div>
+      </div>
+
+      <!-- Settings Section 5: Application Reset -->
+      <div class="settings-row" style="border-top: 1px solid rgba(239, 68, 68, 0.25); padding-top: 14px; margin-top: 10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <label class="settings-label" style="margin-bottom:0; color:#f87171;">⚠️ Reset Application</label>
+        </div>
+        <div class="settings-desc">
+          Clear all application settings, watcher links, and index database associations. On reset, the application returns to the initial setup state and prompts you to select your storage folder. (Your database files on disk will NOT be deleted).
+        </div>
+        <div style="margin-top: 10px;">
+          <button class="btn-header" style="background:rgba(239, 68, 68, 0.15); color:#fca5a5; border:1px solid rgba(239, 68, 68, 0.35);" onclick="confirmResetApp()">
+            🔄 Reset Application Configuration...
+          </button>
         </div>
       </div>
 
