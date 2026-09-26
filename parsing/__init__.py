@@ -5,7 +5,7 @@ Supports spreadsheets, word docs, text files, PDFs, and OCR scanned images.
 
 import os
 from .spreadsheet_parser import parse_xlsx, parse_csv, parse_xls, col_letters_to_num
-from .document_parser import parse_docx, parse_odt, parse_txt, parse_pdf, parse_image
+from .document_parser import parse_docx, parse_odt, parse_txt, parse_pdf, parse_image, parse_zip
 from .ocr_parser import run_ocr, run_ocr_detailed, get_image_dimensions, preprocess_image
 
 def parse_document(fpath):
@@ -26,6 +26,8 @@ def parse_document(fpath):
         return parse_odt(fpath)
     elif ext in ('.txt', '.log', '.json', '.sql'):
         return parse_txt(fpath)
+    elif ext == '.zip':
+        return parse_zip(fpath)
     elif ext == '.pdf':
         res = parse_pdf(fpath)
         if isinstance(res, tuple):

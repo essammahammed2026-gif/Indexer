@@ -79,11 +79,13 @@ def handle_search_csv(handler, parsed):
                 r.get("other_id", ""), r.get("address", ""), r.get("cell_id", "")
             ])
     else:
-        writer.writerow(["File", "Folder", "Sheet", "Row", "Snippet / Content", "Path"])
+        writer.writerow(["File", "Folder", "Sheet", "Row", "Snippet / Content", "Target Phone", "Other Party", "Name", "Time", "Path"])
         for r in rows:
             writer.writerow([
                 r.get("file", ""), r.get("folder", ""), r.get("sheet", ""),
-                r.get("row", ""), r.get("snippet", ""), r.get("path", "")
+                r.get("row", ""), r.get("snippet", ""), r.get("target", ""),
+                r.get("other", ""), r.get("name", ""), r.get("time", ""),
+                r.get("path", "")
             ])
 
     csv_bytes = output.getvalue().encode("utf-8-sig")

@@ -23,7 +23,7 @@ from .state import (
 SUPPORTED_EXTENSIONS = (
     '.xlsx', '.xls', '.csv', '.tsv',
     '.docx', '.odt', '.txt', '.log', '.json', '.sql', '.pdf',
-    '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'
+    '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp', '.zip'
 )
 
 def index_single_target(target_path, db_path=None):

@@ -124,3 +124,30 @@ def parse_image(fpath):
             if line_s:
                 rows_data.append(('Image', idx, [line_s]))
     return rows_data
+
+def parse_zip(fpath):
+    """
+    Directly parse text and spreadsheet files nested inside .zip archives
+    without requiring manual extraction by user.
+    """
+    rows_data = []
+    supported_inner = ('.txt', '.log', '.csv', '.tsv', '.sql', '.json')
+    try:
+        with zipfile.ZipFile(fpath, 'r') as z:
+            for name in z.namelist():
+                if name.startswith('__MACOSX') or name.startswith('.'):
+                    continue
+                inner_ext = os.path.splitext(name)[1].lower()
+                if inner_ext in supported_inner:
+                    try:
+                        content = z.read(name).decode('utf-8', errors='replace')
+                        sname = os.path.basename(name) or 'Archive'
+                        for idx, line in enumerate(content.splitlines(), start=1):
+                            line_s = line.strip()
+                            if line_s:
+                                rows_data.append((sname, idx, [line_s]))
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"[ZIP PARSE ERROR] {fpath}: {e}")
+    return rows_data

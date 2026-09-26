@@ -68,17 +68,6 @@ function injectStaticIcons() {
   setIcon('viewCardIcon', SVG_RAW.cardView);
   setIcon('viewTableIcon', SVG_RAW.tableView);
 
-  setIcon('scopedFolderBoxIcon', SVG_RAW.folder);
-  setIcon('scopedPickBtnIcon', SVG_RAW.folder);
-  setIcon('scopedPickFileIcon', SVG_RAW.doc);
-  setIcon('scopedUploadBoxIcon', SVG_RAW.upload);
-  setIcon('scopedDropIcon', SVG_RAW.image);
-  setIcon('activeScopeIcon', SVG_RAW.folder);
-  setIcon('searchScopedHeroIcon', SVG_RAW.search);
-  setIcon('clearScopedIcon', SVG_RAW.cross);
-  setIcon('scopedViewCardIcon', SVG_RAW.cardView);
-  setIcon('scopedViewTableIcon', SVG_RAW.tableView);
-
   setIcon('modalSettingsIcon', SVG_RAW.settings);
   setIcon('headerDbIcon', SVG_RAW.database);
   setIcon('headerSettingsIcon', SVG_RAW.settings);
