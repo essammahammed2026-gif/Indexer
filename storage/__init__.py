@@ -22,7 +22,8 @@ from .events import (
     get_change_events,
     mark_change_events_read,
     clear_all_change_events,
-    backup_database
+    backup_database,
+    get_skipped_files
 )
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "get_change_events",
     "mark_change_events_read",
     "clear_all_change_events",
-    "backup_database"
+    "backup_database",
+    "get_skipped_files"
 ]
 

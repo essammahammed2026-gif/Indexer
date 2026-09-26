@@ -128,6 +128,18 @@
         </div>
       </div>
 
+      <!-- Settings Section 4: Skipped & Corrupted Files Log -->
+      <div class="settings-row" style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <label class="settings-label" style="margin-bottom:0;">⚠️ Skipped & Unreadable Files</label>
+          <span style="font-size:0.75rem; color:var(--text-dim);" id="skippedFilesCountBadge">0 files</span>
+        </div>
+        <div class="settings-desc">Files that could not be parsed (e.g. password protected or unsupported format) during indexing.</div>
+        <div id="settingsSkippedFilesList" style="max-height: 140px; overflow-y: auto; background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:6px; font-size:0.78rem; font-family:'JetBrains Mono', monospace;">
+          <div style="padding:10px; text-align:center; color:var(--text-dim);">No skipped files recorded.</div>
+        </div>
+      </div>
+
       <div class="modal-actions" style="margin-top: 16px;">
         <button class="btn-header" onclick="closeSettingsModal()">Cancel</button>
         <button class="btn-header primary" onclick="saveSettings()">Save Settings</button>

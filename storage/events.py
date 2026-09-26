@@ -159,3 +159,35 @@ def backup_database(db_path):
         return True, f"Backup created: {os.path.basename(snap_path)}"
     except Exception as e:
         return False, str(e)
+
+def get_skipped_files(db_path, limit=100, offset=0):
+    """Retrieve logged skipped or corrupted files."""
+    if not db_path or not os.path.exists(db_path):
+        return {"items": [], "total": 0}
+    try:
+        conn = get_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM skipped_files;")
+        total = cur.fetchone()[0] or 0
+        cur.execute("""
+        SELECT id, file_path, filename, folder, reason, error_details, created_at
+        FROM skipped_files
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?;
+        """, (limit, offset))
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                "id": r[0],
+                "file_path": r[1],
+                "filename": r[2],
+                "folder": r[3],
+                "reason": r[4],
+                "error_details": r[5],
+                "created_at": r[6]
+            })
+        conn.close()
+        return {"items": items, "total": total}
+    except Exception:
+        return {"items": [], "total": 0}
+

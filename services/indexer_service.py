@@ -6,6 +6,8 @@ Zero external pip dependencies.
 import os
 import sqlite3
 import threading
+import concurrent.futures
+from multiprocessing import cpu_count
 import indexer_engine
 import storage
 from .state import (
@@ -175,30 +177,9 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                 except Exception:
                     pass
 
-            total_records = 0
-            processed_any = False
-
-            for idx, fpath in enumerate(all_files):
-                # Check for stop request
-                if INDEX_STATE.get("stopped"):
-                    stopped = True
-                    break
-
-                # Handle pause loop
-                while INDEX_STATE.get("paused") and not INDEX_STATE.get("stopped"):
-                    time.sleep(0.3)
-
-                if INDEX_STATE.get("stopped"):
-                    stopped = True
-                    break
-
-                fname = os.path.basename(fpath)
-                INDEX_STATE["current"] = idx + 1
-                INDEX_STATE["current_file"] = fname
-                INDEX_STATE["percent"] = round(((idx + 1) / max(len(all_files), 1)) * 100, 1)
-                INDEX_STATE["status_message"] = f"Indexing file {idx + 1} of {len(all_files)}"
-
-                # On refresh: skip files that haven't changed on disk
+            # Filter out files that don't need indexing on refresh
+            files_to_process = []
+            for fpath in all_files:
                 if force_refresh and fpath in indexed_meta:
                     try:
                         st = os.stat(fpath)
@@ -207,14 +188,69 @@ def start_indexing_thread(folder_path, force_reindex=False, force_refresh=False,
                             continue
                     except Exception:
                         pass
+                files_to_process.append(fpath)
 
-                try:
-                    cnt = indexer_engine.process_file(fpath, conn)
-                    total_records += cnt
-                    processed_any = True
-                    INDEX_STATE["records_indexed"] = total_records
-                except Exception as ex:
-                    print(f"[INDEX ERROR] {fname}: {ex}")
+            total_records = 0
+            processed_any = False
+            total_count = len(files_to_process)
+            INDEX_STATE["total"] = total_count
+
+            # Determine optimal parallel worker count (cap at 6 to avoid CPU starvation)
+            max_workers = max(1, min(cpu_count(), 6))
+            BATCH_COMMIT_SIZE = 50
+            uncommitted_writes = 0
+
+            # Parallel extraction pipeline: Extract text/OCR in workers, write to SQLite in main thread
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                # Submit jobs in streaming chunks to conserve memory
+                CHUNK_SIZE = max(max_workers * 4, 16)
+                for chunk_start in range(0, total_count, CHUNK_SIZE):
+                    if INDEX_STATE.get("stopped"):
+                        stopped = True
+                        break
+
+                    chunk_files = files_to_process[chunk_start:chunk_start + CHUNK_SIZE]
+                    future_to_file = {executor.submit(indexer_engine.extract_file_data, fp): fp for fp in chunk_files}
+
+                    for future in concurrent.futures.as_completed(future_to_file):
+                        # Handle pause loop
+                        while INDEX_STATE.get("paused") and not INDEX_STATE.get("stopped"):
+                            time.sleep(0.3)
+
+                        if INDEX_STATE.get("stopped"):
+                            stopped = True
+                            break
+
+                        orig_fpath = future_to_file[future]
+                        fname = os.path.basename(orig_fpath)
+                        processed_idx = chunk_start + list(future_to_file.keys()).index(future) + 1
+
+                        INDEX_STATE["current"] = min(processed_idx, total_count)
+                        INDEX_STATE["current_file"] = fname
+                        INDEX_STATE["percent"] = round((INDEX_STATE["current"] / max(total_count, 1)) * 100, 1)
+                        INDEX_STATE["status_message"] = f"Indexing file {INDEX_STATE['current']} of {total_count} ({max_workers} cores)"
+
+                        try:
+                            extracted = future.result()
+                            cnt = indexer_engine.write_file_data(conn, extracted, commit=False)
+                            total_records += cnt
+                            processed_any = True
+                            uncommitted_writes += 1
+                            INDEX_STATE["records_indexed"] = total_records
+
+                            # Batched transaction commit
+                            if uncommitted_writes >= BATCH_COMMIT_SIZE:
+                                conn.commit()
+                                uncommitted_writes = 0
+                        except Exception as ex:
+                            print(f"[INDEX PARALLEL ERROR] {fname}: {ex}")
+
+                    if stopped:
+                        break
+
+            # Final commit for remaining writes
+            if uncommitted_writes > 0:
+                conn.commit()
 
             # Rebuild FTS and reclaim space if files were modified or reindexed
             if processed_any:

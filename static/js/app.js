@@ -803,6 +803,41 @@ async function openSettingsModal() {
   }
 
   loadDatabases();
+  loadSkippedFiles();
+}
+
+async function loadSkippedFiles() {
+  const container = document.getElementById('settingsSkippedFilesList');
+  const countBadge = document.getElementById('skippedFilesCountBadge');
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/index/skipped');
+    const data = await res.json();
+    const items = data.items || [];
+    if (countBadge) countBadge.innerText = `${items.length} file${items.length === 1 ? '' : 's'}`;
+
+    if (items.length === 0) {
+      container.innerHTML = '<div style="padding:10px; text-align:center; color:var(--text-dim);">No skipped files recorded. All indexed files parsed cleanly.</div>';
+      return;
+    }
+
+    container.innerHTML = items.map(it => `
+      <div style="padding:6px 8px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+        <div style="min-width:0;">
+          <div style="color:#f87171; font-weight:600; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${escapeHtml(it.file_path)}">
+            📄 ${escapeHtml(it.filename || it.file_path)}
+          </div>
+          <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
+            ${escapeHtml(it.error_details || it.reason || '')}
+          </div>
+        </div>
+        <span style="font-size:0.7rem; color:var(--text-dim); white-space:nowrap;">${escapeHtml(it.created_at || '')}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = '<div style="padding:10px; text-align:center; color:#f43f5e;">Failed to load skipped files.</div>';
+  }
 }
 
 function closeSettingsModal() {

@@ -116,6 +116,14 @@ def handle_clear_notifications(handler, parsed):
     else:
         send_error(handler, msg, 500)
 
+def handle_get_skipped_files(handler, parsed):
+    """Return list of skipped or corrupted files for the active database."""
+    qs = urllib.parse.parse_qs(parsed.query)
+    limit = int(qs.get("limit", ["100"])[0]) if qs.get("limit", [""])[0].isdigit() else 100
+    offset = int(qs.get("offset", ["0"])[0]) if qs.get("offset", [""])[0].isdigit() else 0
+    res = storage.get_skipped_files(get_active_db_path(), limit=limit, offset=offset)
+    send_json(handler, res)
+
 def handle_index_pause(handler, parsed):
     ok, msg = pause_indexing()
     if ok:

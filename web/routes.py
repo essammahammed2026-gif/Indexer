@@ -46,6 +46,7 @@ from .handlers.system_handlers import (
     handle_get_notifications,
     handle_read_notifications,
     handle_clear_notifications,
+    handle_get_skipped_files,
     handle_index_start,
     handle_index_refresh,
     handle_index_reindex,
@@ -110,6 +111,7 @@ def create_router():
     router.add_route("GET", "/api/notifications", handle_get_notifications)
     router.add_route("POST", "/api/notifications/read", handle_read_notifications)
     router.add_route("POST", "/api/notifications/clear", handle_clear_notifications)
+    router.add_route("GET", "/api/index/skipped", handle_get_skipped_files)
     router.add_route("POST", "/api/index/start", handle_index_start)
     router.add_route("POST", "/api/index/refresh", handle_index_refresh)
     router.add_route("POST", "/api/index/reindex", handle_index_reindex)

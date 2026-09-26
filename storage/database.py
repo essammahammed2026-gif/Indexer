@@ -136,6 +136,18 @@ def init_tables(conn):
     );
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS skipped_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT UNIQUE,
+        filename TEXT,
+        folder TEXT,
+        reason TEXT,
+        error_details TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cdr_file_id ON cdr_records(file_id);")
     conn.commit()

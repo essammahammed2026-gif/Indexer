@@ -57,19 +57,100 @@ def _extract_cell_value(header_map, row, key):
                 return val
     return None
 
-def process_file(fpath, conn):
+def extract_file_data(fpath):
     """
-    Ingest a single document/spreadsheet/image into the active database.
-    Updates files, cdr_records, universal_search, and ocr_boxes tables in a transaction.
+    CPU-bound extraction of a file into structured rows and OCR boxes.
+    Runs purely in Python memory without touching SQLite, making it suitable
+    for ProcessPoolExecutor parallel execution.
+    Returns: dict with (success, fpath, file_mtime, file_size, all_rows, ocr_boxes_list, error)
     """
-    cur = conn.cursor()
-    folder, filename = os.path.split(fpath)
     file_mtime = 0
     file_size = 0
     try:
         st = os.stat(fpath)
         file_mtime = st.st_mtime
         file_size = st.st_size
+    except Exception:
+        pass
+
+    ext = os.path.splitext(fpath)[1].lower()
+    all_rows = []
+    ocr_boxes_list = []
+
+    try:
+        if ext in ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'):
+            text, boxes = parsing.run_ocr_detailed(fpath)
+            w, h = parsing.get_image_dimensions(fpath)
+            if boxes:
+                ocr_boxes_list.append(('Image', w, h, json.dumps(boxes, ensure_ascii=False)))
+            if text:
+                for idx, line in enumerate(text.splitlines(), start=1):
+                    line_s = line.strip()
+                    if line_s:
+                        all_rows.append(('Image', idx, [line_s]))
+        elif ext == '.pdf':
+            pdf_res = parsing.parse_pdf(fpath)
+            if isinstance(pdf_res, tuple):
+                all_rows, pdf_boxes = pdf_res
+                for sname, (w, h, boxes) in pdf_boxes.items():
+                    if boxes:
+                        ocr_boxes_list.append((sname, w, h, json.dumps(boxes, ensure_ascii=False)))
+            else:
+                all_rows = pdf_res
+        else:
+            all_rows = parsing.parse_document(fpath)
+
+        return {
+            "success": True,
+            "fpath": fpath,
+            "file_mtime": file_mtime,
+            "file_size": file_size,
+            "all_rows": all_rows or [],
+            "ocr_boxes": ocr_boxes_list,
+            "error": None
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "fpath": fpath,
+            "file_mtime": file_mtime,
+            "file_size": file_size,
+            "all_rows": [],
+            "ocr_boxes": [],
+            "error": str(e)
+        }
+
+def write_file_data(conn, extracted, commit=True):
+    """
+    Write extracted file contents into SQLite database tables.
+    Logs failed extractions to skipped_files table.
+    """
+    cur = conn.cursor()
+    fpath = extracted["fpath"]
+    folder, filename = os.path.split(fpath)
+    file_mtime = extracted["file_mtime"]
+    file_size = extracted["file_size"]
+
+    if not extracted["success"]:
+        # Log skipped file with reason
+        try:
+            cur.execute("""
+            INSERT INTO skipped_files (file_path, filename, folder, reason, error_details)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET
+                reason = excluded.reason,
+                error_details = excluded.error_details,
+                created_at = CURRENT_TIMESTAMP;
+            """, (fpath, filename, folder, "Extraction Error", extracted["error"] or "Unknown parsing failure"))
+            if commit:
+                conn.commit()
+        except Exception:
+            pass
+        return 0
+
+    # Ensure removed from skipped_files if previously failed
+    try:
+        cur.execute("DELETE FROM skipped_files WHERE file_path = ?;", (fpath,))
     except Exception:
         pass
 
@@ -83,47 +164,23 @@ def process_file(fpath, conn):
     cur.execute("DELETE FROM universal_search WHERE file_path = ?;", (fpath,))
     cur.execute("DELETE FROM ocr_boxes WHERE file_path = ?;", (fpath,))
 
-    all_rows = []
-    ext = os.path.splitext(fpath)[1].lower()
+    # Insert OCR boxes
+    for sname, w, h, boxes_json in extracted["ocr_boxes"]:
+        cur.execute("""
+        INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(file_path, sheet_name) DO UPDATE SET
+            img_width = excluded.img_width,
+            img_height = excluded.img_height,
+            boxes_json = excluded.boxes_json;
+        """, (fpath, sname, w, h, boxes_json))
 
-    if ext in ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp'):
-        text, boxes = parsing.run_ocr_detailed(fpath)
-        w, h = parsing.get_image_dimensions(fpath)
-        if boxes:
-            cur.execute("""
-            INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(file_path, sheet_name) DO UPDATE SET
-                img_width = excluded.img_width,
-                img_height = excluded.img_height,
-                boxes_json = excluded.boxes_json;
-            """, (fpath, 'Image', w, h, json.dumps(boxes, ensure_ascii=False)))
-        if text:
-            for idx, line in enumerate(text.splitlines(), start=1):
-                line_s = line.strip()
-                if line_s:
-                    all_rows.append(('Image', idx, [line_s]))
-    elif ext == '.pdf':
-        pdf_res = parsing.parse_pdf(fpath)
-        if isinstance(pdf_res, tuple):
-            all_rows, pdf_boxes = pdf_res
-            for sname, (w, h, boxes) in pdf_boxes.items():
-                if boxes:
-                    cur.execute("""
-                    INSERT INTO ocr_boxes (file_path, sheet_name, img_width, img_height, boxes_json)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(file_path, sheet_name) DO UPDATE SET
-                        img_width = excluded.img_width,
-                        img_height = excluded.img_height,
-                        boxes_json = excluded.boxes_json;
-                    """, (fpath, sname, w, h, json.dumps(boxes, ensure_ascii=False)))
-        else:
-            all_rows = pdf_res
-    else:
-        all_rows = parsing.parse_document(fpath)
-
+    all_rows = extracted["all_rows"]
     if not all_rows:
-        conn.commit()
+        cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP, file_mtime = ?, file_size = ? WHERE file_id = ?;",
+                    (file_mtime, file_size, file_id))
+        if commit:
+            conn.commit()
         return 0
 
     # Group by sheet/section
@@ -230,7 +287,6 @@ def process_file(fpath, conn):
             # Store in FTS5 index (limit row_str to prevent blowing up DB size for huge blobs)
             fts_batch.append((fpath, sname, r_idx, row_str[:2000]))
 
-    # Chunked insertions to conserve memory and maintain fast SQLite commit performance
     CHUNK_SIZE = 5000
     if cdr_batch:
         for i in range(0, len(cdr_batch), CHUNK_SIZE):
@@ -252,5 +308,14 @@ def process_file(fpath, conn):
 
     cur.execute("UPDATE files SET indexed_at = CURRENT_TIMESTAMP, file_mtime = ?, file_size = ? WHERE file_id = ?;",
                 (file_mtime, file_size, file_id))
-    conn.commit()
+    if commit:
+        conn.commit()
     return len(fts_batch)
+
+def process_file(fpath, conn):
+    """
+    Ingest a single document/spreadsheet/image into the active database.
+    Updates files, cdr_records, universal_search, and ocr_boxes tables in a transaction.
+    """
+    extracted = extract_file_data(fpath)
+    return write_file_data(conn, extracted, commit=True)
