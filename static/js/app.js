@@ -43,13 +43,10 @@ function injectStaticIcons() {
   setIcon('headerBellIcon', SVG_RAW.bell);
   setIcon('notifMenuBellIcon', SVG_RAW.bell);
   setIcon('hubBellIcon', SVG_RAW.bell);
-  setIcon('menuNotifIcon', SVG_RAW.bell);
   setIcon('toolsIcon', SVG_RAW.settings);
   setIcon('menuBookmarkIcon', SVG_RAW.tag);
   setIcon('menuBackupIcon', SVG_RAW.database);
-  setIcon('menuExportIcon', SVG_RAW.download);
-  setIcon('menuImportIcon', SVG_RAW.upload);
-  setIcon('menuCsvIcon', SVG_RAW.excel);
+  setIcon('statusCsvIcon', SVG_RAW.excel);
 
   setIcon('tabGlobalIcon', SVG_RAW.globe);
   setIcon('tabScopedIcon', SVG_RAW.target);
@@ -120,6 +117,13 @@ document.addEventListener('click', (e) => {
 
 // Force Refresh: Recheck files without wiping the index
 async function triggerForceRefresh() {
+  const toolsDd = document.getElementById('toolsDropdown');
+  if (toolsDd) toolsDd.classList.remove('open');
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    showToast("⚠️ Please select an active database first");
+    return;
+  }
   showToast("🔄 Rechecking index folder for changes...");
   try {
     const res = await fetch('/api/index/refresh', { method: 'POST' });
@@ -138,7 +142,14 @@ async function triggerForceRefresh() {
 
 // Force Re-Index: Full wipe and rebuild with confirmation
 async function triggerForceReindex() {
-  const confirmed = confirm("⚠️ ATTENTION: Force Re-Index will wipe the current index (universal search, OCR text, and CDR records) and re-index all documents from scratch.\n\nA safety backup will be created automatically.\n\nDo you want to proceed?");
+  const toolsDd = document.getElementById('toolsDropdown');
+  if (toolsDd) toolsDd.classList.remove('open');
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    showToast("⚠️ Please select an active database first");
+    return;
+  }
+  const confirmed = confirm(`⚠️ ATTENTION: Force Re-Index will wipe all indexed records for "${activeObj.nickname || activeObj.id}" and re-index the folder from scratch.\n\nDo you want to proceed?`);
   if (!confirmed) return;
 
   showToast("🧹 Wiping index & starting fresh re-index...");
@@ -1354,11 +1365,20 @@ async function refreshBookmarkCount() {
 }
 
 async function viewBookmarks() {
+  const toolsDd = document.getElementById('toolsDropdown');
+  if (toolsDd) toolsDd.classList.remove('open');
+
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    showToast("⚠️ Please select an active database first");
+    return;
+  }
+
   try {
     const res = await fetch('/api/bookmarks');
     const data = await res.json();
-    if (data.bookmarks.length === 0) {
-      showToast("No bookmarks saved yet");
+    if (!data.bookmarks || data.bookmarks.length === 0) {
+      showToast("No bookmarks saved yet in active database");
       return;
     }
     const fakeRows = data.bookmarks.map(b => ({
@@ -1375,8 +1395,9 @@ async function viewBookmarks() {
     }));
     totalResults = fakeRows.length;
     lastResults = fakeRows;
-    renderCards(fakeRows);
-    document.getElementById('resultsCount').innerText = `${fakeRows.length} Bookmarks loaded`;
+    switchView('card');
+    renderViewData({ rows: fakeRows, total: fakeRows.length });
+    document.getElementById('resultsCount').innerText = `${fakeRows.length} Bookmark${fakeRows.length === 1 ? '' : 's'} loaded`;
   } catch (e) {
     showToast("❌ Network error fetching bookmarks");
   }
@@ -1539,6 +1560,11 @@ function renderViewData(data) {
   } else {
     paginationBar.style.display = 'none';
     if (topPaginationBar) topPaginationBar.style.display = 'none';
+  }
+
+  const csvBtn = document.getElementById('btnExportCsv');
+  if (csvBtn) {
+    csvBtn.style.display = (totalResults > 0 && currentQuery) ? 'inline-flex' : 'none';
   }
 
   renderFilteredResults();
@@ -2185,6 +2211,13 @@ function closeImagePreview() {
 }
 
 async function triggerBackup() {
+  const toolsDd = document.getElementById('toolsDropdown');
+  if (toolsDd) toolsDd.classList.remove('open');
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    showToast("⚠️ Please select an active database first");
+    return;
+  }
   showToast("💾 Creating snapshot backup...");
   try {
     const res = await fetch('/api/backup');
@@ -2192,48 +2225,25 @@ async function triggerBackup() {
     if (data.ok) {
       showToast(`✅ ${data.message}`);
     } else {
-      showToast(`❌ Backup failed`);
+      showToast(`❌ Backup failed: ${data.error || 'Unknown error'}`);
     }
   } catch (err) {
     showToast(`❌ Network error creating backup`);
   }
 }
 
-function exportIndex() {
-  window.location.href = '/api/index/export';
-}
-
 function exportCSV() {
-  if (!currentQuery) {
-    alert("Please enter a search query before exporting CSV!");
+  const q = currentQuery || (document.getElementById('queryInput')?.value || '').trim();
+  if (!q && lastResults.length === 0) {
+    showToast("⚠️ Perform a search query before exporting CSV");
     return;
   }
-  window.location.href = `/api/search/csv?q=${encodeURIComponent(currentQuery)}`;
-}
-
-async function handleImportFile(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (!confirm(`Are you sure you want to restore/import "${file.name}"? Existing index will be backed up.`)) {
+  if (!q) {
+    showToast("⚠️ No query available to export");
     return;
   }
-  showToast("📥 Uploading and verifying database...");
-  const formData = new FormData();
-  formData.append('dbfile', file, file.name);
-
-  try {
-    const res = await fetch('/api/index/import', { method: 'POST', body: formData });
-    const data = await res.json();
-    if (data.ok) {
-      showToast("✅ Database restored! Reloading stats...");
-      refreshStats();
-      doSearch(0);
-    } else {
-      alert(`❌ Import error: ${data.error}`);
-    }
-  } catch (err) {
-    showToast("❌ Network error importing database");
-  }
+  showToast("📥 Exporting results to CSV...");
+  window.location.href = `/api/search/csv?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(currentSearchMode)}`;
 }
 
 window.onload = () => {

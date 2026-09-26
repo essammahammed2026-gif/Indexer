@@ -351,9 +351,6 @@
     </div>
   </div>
 
-  <!-- Hidden File Input for Importing DB -->
-  <input type="file" id="dbFileInput" accept=".db,.sqlite,.sqlite3" style="display:none;" onchange="handleImportFile(event)">
-
   <!-- Header -->
   <div class="header">
     <div class="header-brand">
@@ -436,29 +433,17 @@
         </button>
         <div class="dropdown-content">
           <button class="dropdown-item" onclick="triggerForceRefresh()">
-            <span class="icon-slate" id="headerRefreshIcon"></span> Refresh Changes
+            <span class="icon-slate" id="headerRefreshIcon"></span> Refresh Active Folder
           </button>
           <button class="dropdown-item" onclick="viewBookmarks()">
-            <span class="icon-slate" id="menuBookmarkIcon"></span> Bookmarks (<span id="bmCountBadge">0</span>)
-          </button>
-          <button class="dropdown-item" onclick="openNotificationHub()">
-            <span class="icon-slate" id="menuNotifIcon"></span> Notification Hub
-          </button>
-          <button class="dropdown-item" onclick="exportCSV()">
-            <span class="icon-slate" id="menuCsvIcon"></span> Export Results CSV
+            <span class="icon-slate" id="menuBookmarkIcon"></span> View Bookmarks (<span id="bmCountBadge">0</span>)
           </button>
           <button class="dropdown-item" onclick="triggerBackup()">
             <span class="icon-slate" id="menuBackupIcon"></span> Snapshot Backup
           </button>
-          <button class="dropdown-item" onclick="exportIndex()">
-            <span class="icon-slate" id="menuExportIcon"></span> Export DB
-          </button>
-          <button class="dropdown-item" onclick="document.getElementById('dbFileInput').click()">
-            <span class="icon-slate" id="menuImportIcon"></span> Import DB
-          </button>
           <div style="border-top: 1px solid var(--border-subtle); margin: 4px 0;"></div>
           <button class="dropdown-item" onclick="triggerForceReindex()" style="color:#f87171;">
-            <span class="icon-rose" id="headerReindexIcon"></span> Re-Index From Scratch
+            <span class="icon-rose" id="headerReindexIcon"></span> Re-Index Active Database
           </button>
         </div>
       </div>
@@ -564,6 +549,10 @@
         <span style="margin-left:6px; opacity:0.6;" id="timing">0ms</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
+        <button id="btnExportCsv" class="group-toggle-btn" onclick="exportCSV()" title="Export current search results as CSV" style="display:none;">
+          <span class="icon-slate" id="statusCsvIcon"></span>
+          <span>Export CSV</span>
+        </button>
         <button id="btnGroupToggle" class="group-toggle-btn" onclick="toggleGroupByFile()" title="Toggle collapsed results grouped by file and sheet">
           <span id="groupToggleBtnIcon">📁</span>
           <span id="groupToggleBtnText">Group by File</span>

@@ -61,7 +61,11 @@ def handle_pick_file_dialog(handler, parsed):
     send_success(handler, path=chosen or "")
 
 def handle_backup(handler, parsed):
-    ok, msg = storage.backup_database(get_active_db_path())
+    active_path = get_active_db_path()
+    if not active_path or not os.path.exists(active_path):
+        send_error(handler, "No active database loaded. Please select a database first.", 400)
+        return
+    ok, msg = storage.backup_database(active_path)
     if ok:
         send_success(handler, msg)
     else:
