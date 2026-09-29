@@ -160,6 +160,23 @@ def backup_database(db_path):
     except Exception as e:
         return False, str(e)
 
+def optimize_database(db_path):
+    """Compact and defragment database by flushing WAL and running VACUUM to reclaim disk space."""
+    if not db_path or not os.path.exists(db_path):
+        return False, "Database does not exist yet", 0, 0
+    try:
+        old_size = os.path.getsize(db_path)
+        conn = get_connection(db_path)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        conn.execute("VACUUM;")
+        conn.execute("PRAGMA optimize;")
+        conn.close()
+        new_size = os.path.getsize(db_path)
+        reclaimed = max(0, old_size - new_size)
+        return True, f"Database optimized successfully.", old_size, new_size
+    except Exception as e:
+        return False, str(e), 0, 0
+
 def get_skipped_files(db_path, limit=100, offset=0):
     """Retrieve logged skipped or corrupted files."""
     if not db_path or not os.path.exists(db_path):

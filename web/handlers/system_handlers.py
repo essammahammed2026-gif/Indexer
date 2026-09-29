@@ -71,6 +71,26 @@ def handle_backup(handler, parsed):
     else:
         send_error(handler, msg, 500)
 
+def handle_optimize(handler, parsed):
+    active_path = get_active_db_path()
+    if not active_path or not os.path.exists(active_path):
+        send_error(handler, "No active database loaded. Please select a database first.", 400)
+        return
+    if INDEX_STATE.get("status") == "indexing":
+        send_error(handler, "Cannot optimize database while background indexing is in progress.", 409)
+        return
+    ok, msg, old_sz, new_sz = storage.optimize_database(active_path)
+    if ok:
+        send_success(
+            handler,
+            msg,
+            old_size=old_sz,
+            new_size=new_sz,
+            reclaimed_bytes=max(0, old_sz - new_sz)
+        )
+    else:
+        send_error(handler, msg, 500)
+
 def handle_watch_status(handler, parsed):
     send_json(handler, WATCHER_CONFIG)
 

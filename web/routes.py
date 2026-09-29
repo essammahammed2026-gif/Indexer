@@ -41,6 +41,7 @@ from .handlers.system_handlers import (
     handle_pick_folder_dialog,
     handle_pick_file_dialog,
     handle_backup,
+    handle_optimize,
     handle_watch_status,
     handle_watch_toggle,
     handle_index_status,
@@ -84,6 +85,7 @@ def create_router():
     router.add_route("POST", "/api/databases/rename", handle_rename_database)
     router.add_route("POST", "/api/databases/create", handle_create_database)
     router.add_route("POST", "/api/databases/delete", handle_delete_database)
+    router.add_route("POST", "/api/databases/optimize", handle_optimize)
     router.add_route("POST", "/api/index/import", handle_import_database)
 
     # Settings

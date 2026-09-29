@@ -23,6 +23,7 @@ from .events import (
     mark_change_events_read,
     clear_all_change_events,
     backup_database,
+    optimize_database,
     get_skipped_files
 )
 
@@ -44,6 +45,7 @@ __all__ = [
     "mark_change_events_read",
     "clear_all_change_events",
     "backup_database",
+    "optimize_database",
     "get_skipped_files"
 ]
 

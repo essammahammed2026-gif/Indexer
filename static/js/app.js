@@ -46,6 +46,7 @@ function injectStaticIcons() {
   setIcon('toolsIcon', SVG_RAW.settings);
   setIcon('menuBookmarkIcon', SVG_RAW.tag);
   setIcon('menuBackupIcon', SVG_RAW.database);
+  setIcon('menuOptimizeIcon', SVG_RAW.sparkles);
   setIcon('statusCsvIcon', SVG_RAW.excel);
 
   setIcon('tabGlobalIcon', SVG_RAW.globe);
@@ -692,7 +693,8 @@ function renderSettingsDbList(databases, activeId) {
             ${db.watch_folder ? `• 📁 <span title="${escapeHtml(db.watch_folder)}">${escapeHtml(db.watch_folder.split('/').slice(-2).join('/'))}</span>` : ''}
           </div>
         </div>
-        <div style="display:flex; gap:6px; margin-left:10px;">
+        <div style="display:flex; gap:6px; margin-left:10px; align-items:center;">
+          ${isActive ? `<button class="btn-header" style="padding:3px 8px; font-size:0.75rem; color:var(--accent);" onclick="triggerOptimizeDb()" title="Reclaim disk space and compact database file">🧹 Optimize</button>` : ''}
           ${!isActive ? `<button class="btn-header" style="padding:3px 8px; font-size:0.75rem;" onclick="switchDatabase('${escapeHtml(db.id)}')">Switch To</button>` : ''}
           <button class="btn-header" style="padding:3px 8px; font-size:0.75rem;" onclick="renameDatabasePrompt('${escapeHtml(db.id)}', '${escapeHtml(db.nickname || db.id)}')">Rename</button>
           ${!isActive ? `<button class="btn-header" style="padding:3px 8px; font-size:0.75rem; color:#fca5a5;" onclick="deleteDatabasePrompt('${escapeHtml(db.id)}', '${escapeHtml(db.nickname || db.id)}')">Delete</button>` : ''}
@@ -2240,6 +2242,37 @@ async function triggerBackup() {
     }
   } catch (err) {
     showToast(`❌ Network error creating backup`);
+  }
+}
+
+async function triggerOptimizeDb() {
+  const toolsDd = document.getElementById('toolsDropdown');
+  if (toolsDd) toolsDd.classList.remove('open');
+  const activeObj = cachedDatabases.find(d => d.is_active);
+  if (!activeObj) {
+    showToast("⚠️ Please select an active database first");
+    return;
+  }
+
+  showToast("🧹 Optimizing & compacting database (VACUUM)...");
+  try {
+    const res = await fetch('/api/databases/optimize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const oldMb = (data.old_size / (1024 * 1024)).toFixed(1);
+      const newMb = (data.new_size / (1024 * 1024)).toFixed(1);
+      const reclaimedMb = (data.reclaimed_bytes / (1024 * 1024)).toFixed(1);
+      showToast(`✨ Database compacted: ${oldMb} MB ➔ ${newMb} MB (freed ${reclaimedMb} MB)!`);
+      await loadDatabases();
+      await refreshStats();
+    } else {
+      showToast(`❌ Optimization failed: ${data.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    showToast(`❌ Network error optimizing database`);
   }
 }
 

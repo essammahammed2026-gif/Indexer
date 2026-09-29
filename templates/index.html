@@ -196,8 +196,23 @@
 
         <!-- Tab 4: Maintenance & Reset -->
         <div id="settingsPane_maintenance" class="settings-tab-pane">
-          <!-- Skipped Files Diagnostics -->
+          <!-- Database Compaction & Optimization -->
           <div class="settings-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <label class="settings-label" style="margin-bottom:0;">🧹 Database Compaction & Optimization</label>
+            </div>
+            <div class="settings-desc">
+              Reclaim unused empty space and defragment SQLite pages by flushing pending WAL logs and executing <code>VACUUM</code>. This safely shrinks the database file and subsequent snapshots to only actual live data.
+            </div>
+            <div style="margin-top: 10px;">
+              <button type="button" class="btn-header" style="color:var(--accent); border-color:rgba(56, 189, 248, 0.4);" onclick="triggerOptimizeDb()">
+                🧹 Compact & Optimize Active Database
+              </button>
+            </div>
+          </div>
+
+          <!-- Skipped Files Diagnostics -->
+          <div class="settings-card" style="margin-top:14px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
               <label class="settings-label" style="margin-bottom:0;">⚠️ Skipped & Unreadable Files</label>
               <span style="font-size:0.75rem; color:var(--text-dim);" id="skippedFilesCountBadge">0 files</span>
@@ -473,6 +488,9 @@
           </button>
           <button class="dropdown-item" onclick="triggerBackup()">
             <span class="icon-slate" id="menuBackupIcon"></span> Snapshot Backup
+          </button>
+          <button class="dropdown-item" onclick="triggerOptimizeDb()">
+            <span class="icon-slate" id="menuOptimizeIcon"></span> Compact & Optimize Database
           </button>
           <div style="border-top: 1px solid var(--border-subtle); margin: 4px 0;"></div>
           <button class="dropdown-item" onclick="triggerForceReindex()" style="color:#f87171;">
