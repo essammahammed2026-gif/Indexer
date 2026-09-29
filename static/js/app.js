@@ -780,10 +780,21 @@ async function deleteDatabasePrompt(id, nick) {
 }
 
 // Settings Modal Management
-async function openSettingsModal() {
+function switchSettingsTab(tabName) {
+  const tabs = ['storage', 'watcher', 'databases', 'maintenance'];
+  tabs.forEach(t => {
+    const btn = document.getElementById(`settingsTabBtn_${t}`);
+    const pane = document.getElementById(`settingsPane_${t}`);
+    if (btn) btn.classList.toggle('active', t === tabName);
+    if (pane) pane.classList.toggle('active', t === tabName);
+  });
+}
+
+async function openSettingsModal(defaultTab = 'storage') {
   const modal = document.getElementById('settingsModal');
   if (!modal) return;
   modal.classList.add('active');
+  switchSettingsTab(defaultTab);
 
   try {
     const res = await fetch('/api/settings');

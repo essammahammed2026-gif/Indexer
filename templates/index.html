@@ -86,114 +86,147 @@
 
   <!-- Settings Menu Modal -->
   <div id="settingsModal" class="modal-overlay">
-    <div class="modal-content" style="max-width: 650px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px;">
+    <div class="modal-content settings-modal-dialog">
+      <!-- Fixed Header -->
+      <div class="settings-modal-header">
         <h3 style="margin:0; display:flex; align-items:center; gap:8px;">
-          <span class="icon-slate" id="modalSettingsIcon"></span> Application Settings & Watcher Options
+          <span class="icon-slate" id="modalSettingsIcon"></span> Application Settings & Options
         </h3>
         <button class="btn-header" onclick="closeSettingsModal()">✕</button>
       </div>
 
-      <!-- Settings Section 1: Database Storage Location -->
-      <div class="settings-row">
-        <label class="settings-label">📁 Database Storage Location</label>
-        <div class="settings-desc">Choose where all indexed SQLite database files are saved (defaults to application directory). You can choose an external drive, custom folder, or dedicated volume.</div>
-        <div style="display:flex; gap:8px;">
-          <input type="text" id="settingsDbStorageDir" class="settings-input" style="flex:1;" placeholder="/home/username/IndexerDatabases">
-          <button class="btn-header" onclick="pickStorageDirNative()" title="Select directory using native dialog">Browse...</button>
-        </div>
+      <!-- Tab Navigation Bar -->
+      <div class="settings-tabs-bar">
+        <button type="button" class="settings-tab-btn active" id="settingsTabBtn_storage" onclick="switchSettingsTab('storage')">
+          📁 Storage
+        </button>
+        <button type="button" class="settings-tab-btn" id="settingsTabBtn_watcher" onclick="switchSettingsTab('watcher')">
+          ⚡ Watcher
+        </button>
+        <button type="button" class="settings-tab-btn" id="settingsTabBtn_databases" onclick="switchSettingsTab('databases')">
+          🗄 Databases
+        </button>
+        <button type="button" class="settings-tab-btn" id="settingsTabBtn_maintenance" onclick="switchSettingsTab('maintenance')">
+          ⚠️ Maintenance & Reset
+        </button>
       </div>
 
-      <!-- Settings Section 2: Watcher Options -->
-      <div class="settings-row" style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
-        <label class="settings-label">⚡ Live Watcher Options</label>
-        <div class="settings-desc">Fine-tune continuous background file watching and auto-sync behaviors.</div>
-        
-        <div class="settings-grid">
-          <div>
-            <label style="display:block; font-size:0.76rem; color:var(--text-muted); margin-bottom:4px;">Polling Scan Interval:</label>
-            <select id="settingsWatcherPoll" class="settings-input">
-              <option value="1">1 second (High responsiveness)</option>
-              <option value="3">3 seconds (Recommended default)</option>
-              <option value="5">5 seconds (Low CPU)</option>
-              <option value="10">10 seconds</option>
-              <option value="30">30 seconds (Large drives)</option>
-            </select>
+      <!-- Scrollable Tab Content Container -->
+      <div class="settings-body-scroll">
+        <!-- Tab 1: Storage Location -->
+        <div id="settingsPane_storage" class="settings-tab-pane active">
+          <div class="settings-card">
+            <label class="settings-label">📁 Database Storage Directory</label>
+            <div class="settings-desc">
+              All created index SQLite database files are saved in this directory. You can specify a dedicated folder on your primary drive, an external volume, or network share.
+            </div>
+            <div style="display:flex; gap:8px;">
+              <input type="text" id="settingsDbStorageDir" class="settings-input" style="flex:1;" placeholder="/home/username/IndexerDatabases">
+              <button type="button" class="btn-header" onclick="pickStorageDirNative()" title="Select directory using native dialog">Browse...</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Watcher Options -->
+        <div id="settingsPane_watcher" class="settings-tab-pane">
+          <div class="settings-card">
+            <label class="settings-label">⚡ Background Watcher Options</label>
+            <div class="settings-desc">Fine-tune continuous background file watching, auto-detection sensitivity, and resource limits.</div>
+            
+            <div class="settings-grid">
+              <div>
+                <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:5px;">Polling Scan Interval:</label>
+                <select id="settingsWatcherPoll" class="settings-input">
+                  <option value="1">1 second (High responsiveness)</option>
+                  <option value="3">3 seconds (Recommended default)</option>
+                  <option value="5">5 seconds (Low CPU)</option>
+                  <option value="10">10 seconds</option>
+                  <option value="30">30 seconds (Large drives)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:5px;">Debounce Settle Delay:</label>
+                <select id="settingsWatcherDebounce" class="settings-input">
+                  <option value="1">1 second</option>
+                  <option value="2">2 seconds (Recommended default)</option>
+                  <option value="5">5 seconds (Wait for slow copies)</option>
+                  <option value="10">10 seconds</option>
+                </select>
+              </div>
+
+              <div>
+                <label style="display:block; font-size:0.78rem; color:var(--text-muted); margin-bottom:5px;">Max File Size to Auto-Index:</label>
+                <select id="settingsWatcherMaxSize" class="settings-input">
+                  <option value="50">50 MB</option>
+                  <option value="100">100 MB</option>
+                  <option value="250">250 MB (Recommended default)</option>
+                  <option value="500">500 MB</option>
+                  <option value="1024">1 GB</option>
+                </select>
+              </div>
+
+              <div style="display:flex; flex-direction:column; justify-content:center;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:14px;">
+                  <input type="checkbox" id="settingsWatcherIgnoreTemp" checked style="accent-color:var(--accent); cursor:pointer;">
+                  <span style="font-size:0.8rem; color:#f1f5f9;">
+                    Ignore temporary & hidden files (<code>~$*</code>, <code>.*</code>)
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Registered Databases -->
+        <div id="settingsPane_databases" class="settings-tab-pane">
+          <div class="settings-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <div>
+                <label class="settings-label" style="margin-bottom:2px;">🗄 Registered Databases & Nicknames</label>
+                <div class="settings-desc" style="margin-bottom:0;">Manage and organize your indexed profiles, switch active index, or rename/delete databases.</div>
+              </div>
+              <span style="font-size:0.75rem; color:var(--text-dim);" id="settingsDbCountBadge">0 databases</span>
+            </div>
+            <div id="settingsDbList" style="max-height: 320px; overflow-y: auto; background:#040711; border:1px solid var(--border); border-radius:8px; padding:8px;">
+              <!-- Injected via JavaScript -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Maintenance & Reset -->
+        <div id="settingsPane_maintenance" class="settings-tab-pane">
+          <!-- Skipped Files Diagnostics -->
+          <div class="settings-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <label class="settings-label" style="margin-bottom:0;">⚠️ Skipped & Unreadable Files</label>
+              <span style="font-size:0.75rem; color:var(--text-dim);" id="skippedFilesCountBadge">0 files</span>
+            </div>
+            <div class="settings-desc">Files that could not be parsed (e.g., password protected or unsupported format) during background or manual indexing.</div>
+            <div id="settingsSkippedFilesList" style="max-height: 180px; overflow-y: auto; background:#040711; border:1px solid var(--border); border-radius:8px; padding:8px; font-size:0.78rem; font-family:'JetBrains Mono', monospace;">
+              <div style="padding:10px; text-align:center; color:var(--text-dim);">No skipped files recorded.</div>
+            </div>
           </div>
 
-          <div>
-            <label style="display:block; font-size:0.76rem; color:var(--text-muted); margin-bottom:4px;">Debounce Settle Delay:</label>
-            <select id="settingsWatcherDebounce" class="settings-input">
-              <option value="1">1 second</option>
-              <option value="2">2 seconds (Recommended default)</option>
-              <option value="5">5 seconds (Wait for slow copies)</option>
-              <option value="10">10 seconds</option>
-            </select>
-          </div>
-
-          <div>
-            <label style="display:block; font-size:0.76rem; color:var(--text-muted); margin-bottom:4px;">Max File Size to Auto-Index:</label>
-            <select id="settingsWatcherMaxSize" class="settings-input">
-              <option value="50">50 MB</option>
-              <option value="100">100 MB</option>
-              <option value="250">250 MB (Recommended default)</option>
-              <option value="500">500 MB</option>
-              <option value="1024">1 GB</option>
-            </select>
-          </div>
-
-          <div style="display:flex; flex-direction:column; justify-content:center;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <input type="checkbox" id="settingsWatcherIgnoreTemp" checked style="accent-color:var(--accent); cursor:pointer;">
-              <label for="settingsWatcherIgnoreTemp" style="font-size:0.78rem; color:#f1f5f9; cursor:pointer;">
-                Ignore temporary & hidden files (<code>~$*</code>, <code>.*</code>)
-              </label>
+          <!-- Application Reset -->
+          <div class="settings-card settings-card-danger" style="margin-top:14px;">
+            <label class="settings-label" style="color:#f87171; margin-bottom:4px;">⚠️ Reset Application Configuration</label>
+            <div class="settings-desc">
+              Clear all saved preferences, watcher links, and registered database associations. On reset, the application returns to its initial setup state and prompts you to select your storage folder. (Your actual database files on disk will NOT be deleted).
+            </div>
+            <div style="margin-top: 12px;">
+              <button type="button" class="btn-header" style="background:rgba(239, 68, 68, 0.15); color:#fca5a5; border:1px solid rgba(239, 68, 68, 0.35);" onclick="confirmResetApp()">
+                🔄 Reset Application Configuration...
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Settings Section 3: Manage Databases List -->
-      <div class="settings-row" style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <label class="settings-label" style="margin-bottom:0;">🗄 Registered Databases & Nicknames</label>
-          <span style="font-size:0.75rem; color:var(--text-dim);" id="settingsDbCountBadge">1 database</span>
-        </div>
-        <div id="settingsDbList" style="max-height: 180px; overflow-y: auto; background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:6px;">
-          <!-- Injected via JavaScript -->
-        </div>
-      </div>
-
-      <!-- Settings Section 4: Skipped & Corrupted Files Log -->
-      <div class="settings-row" style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <label class="settings-label" style="margin-bottom:0;">⚠️ Skipped & Unreadable Files</label>
-          <span style="font-size:0.75rem; color:var(--text-dim);" id="skippedFilesCountBadge">0 files</span>
-        </div>
-        <div class="settings-desc">Files that could not be parsed (e.g. password protected or unsupported format) during indexing.</div>
-        <div id="settingsSkippedFilesList" style="max-height: 140px; overflow-y: auto; background:#090e1a; border:1px solid var(--border); border-radius:8px; padding:6px; font-size:0.78rem; font-family:'JetBrains Mono', monospace;">
-          <div style="padding:10px; text-align:center; color:var(--text-dim);">No skipped files recorded.</div>
-        </div>
-      </div>
-
-      <!-- Settings Section 5: Application Reset -->
-      <div class="settings-row" style="border-top: 1px solid rgba(239, 68, 68, 0.25); padding-top: 14px; margin-top: 10px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <label class="settings-label" style="margin-bottom:0; color:#f87171;">⚠️ Reset Application</label>
-        </div>
-        <div class="settings-desc">
-          Clear all application settings, watcher links, and index database associations. On reset, the application returns to the initial setup state and prompts you to select your storage folder. (Your database files on disk will NOT be deleted).
-        </div>
-        <div style="margin-top: 10px;">
-          <button class="btn-header" style="background:rgba(239, 68, 68, 0.15); color:#fca5a5; border:1px solid rgba(239, 68, 68, 0.35);" onclick="confirmResetApp()">
-            🔄 Reset Application Configuration...
-          </button>
-        </div>
-      </div>
-
-      <div class="modal-actions" style="margin-top: 16px;">
-        <button class="btn-header" onclick="closeSettingsModal()">Cancel</button>
-        <button class="btn-header primary" onclick="saveSettings()">Save Settings</button>
+      <!-- Fixed Actions Footer -->
+      <div class="modal-actions" style="margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px; flex-shrink: 0;">
+        <button type="button" class="btn-header" onclick="closeSettingsModal()">Cancel</button>
+        <button type="button" class="btn-header primary" onclick="saveSettings()">Save Settings</button>
       </div>
     </div>
   </div>
