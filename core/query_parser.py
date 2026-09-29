@@ -48,6 +48,18 @@ def parse_google_query(raw_query):
             folder_filter = dir_m.group(1).strip()
             clean = re.sub(r"\b(?:folder|dir):[^\s]+", " ", clean, flags=re.IGNORECASE).strip()
 
+    # filename:name or file:name operator (quoted or single token)
+    filename_filter = None
+    fn_m = re.search(r"\b(?:filename|name|file):\"([^\"]+)\"", clean, re.IGNORECASE)
+    if fn_m:
+        filename_filter = fn_m.group(1).strip()
+        clean = re.sub(r"\b(?:filename|name|file):\"[^\"]+\"", " ", clean, flags=re.IGNORECASE).strip()
+    else:
+        fn_m = re.search(r"\b(?:filename|name|file):([^\s]+)", clean, re.IGNORECASE)
+        if fn_m:
+            filename_filter = fn_m.group(1).strip()
+            clean = re.sub(r"\b(?:filename|name|file):[^\s]+", " ", clean, flags=re.IGNORECASE).strip()
+
     # 2. Extract exact phrases in quotes "..."
     exact_phrases = [p.strip() for p in re.findall(r"\"([^\"]+)\"", clean) if p.strip()]
     clean_no_quotes = re.sub(r"\"[^\"]*\"", " ", clean).strip()
@@ -101,6 +113,7 @@ def parse_google_query(raw_query):
         "filetype": filetype,
         "phone_filter": phone_filter,
         "folder_filter": folder_filter,
+        "filename_filter": filename_filter,
         "exact_phrases": exact_phrases,
         "clean_tokens": [t.strip("(),:;\"'") for t in clean_tokens if t.strip("(),:;\"'")]
     }

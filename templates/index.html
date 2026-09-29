@@ -555,7 +555,7 @@
 
       <div class="search-bar-row">
         <span class="search-icon-inside icon-slate" id="searchHeroIcon"></span>
-        <input type="text" id="queryInput" placeholder="Search text, phone (e.g. 010...), exact &quot;phrases&quot;, ext:pdf, folder:... (Ctrl+K)" oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
+        <input type="text" id="queryInput" placeholder="Search text, file:name, phone (010...), exact &quot;phrases&quot;, ext:pdf, folder:... (Ctrl+K)" oninput="handleInput(event)" onkeydown="if(event.key==='Enter') doSearch(0)" autofocus>
         <button id="clearSearchBtn" class="clear-btn" onclick="clearSearch()" title="Clear">
           <span class="icon-slate" id="clearSearchIcon"></span>
         </button>
@@ -568,6 +568,9 @@
       <div class="filter-tabs-row">
         <button class="filter-pill active" onclick="setTypeFilter('all', this)">
           <span class="icon-slate" id="filterAllIcon"></span> All
+        </button>
+        <button class="filter-pill" onclick="setTypeFilter('filename', this)" title="Search only file names (ignores file body/contents)">
+          <span class="icon-slate" id="filterFilenameIcon"></span> File Names Only
         </button>
         <button class="filter-pill" onclick="setTypeFilter('doc', this)">
           <span class="icon-slate" id="filterDocIcon"></span> Documents

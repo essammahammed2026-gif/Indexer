@@ -57,6 +57,7 @@ function injectStaticIcons() {
   setIcon('btnSearchIcon', SVG_RAW.search);
 
   setIcon('filterAllIcon', SVG_RAW.sparkles);
+  setIcon('filterFilenameIcon', SVG_RAW.folder);
   setIcon('filterDocIcon', SVG_RAW.pdf);
   setIcon('filterSheetIcon', SVG_RAW.excel);
   setIcon('filterImageIcon', SVG_RAW.image);
@@ -431,11 +432,21 @@ function toggleGroupByFile() {
 }
 
 function setTypeFilter(type, btnEl) {
+  const prevFilter = activeTypeFilter;
   activeTypeFilter = type;
   document.querySelectorAll('.filter-tabs-row .filter-pill').forEach(el => {
     el.classList.remove('active');
   });
   if (btnEl) btnEl.classList.add('active');
+
+  // If switching into or out of 'filename' mode, trigger fresh backend search
+  if (type === 'filename' || prevFilter === 'filename') {
+    if (currentQuery) {
+      doSearch(0);
+      return;
+    }
+  }
+
   renderFilteredResults();
 }
 
@@ -1434,8 +1445,10 @@ async function doSearch(page = 0) {
   const t0 = performance.now();
   document.getElementById('resultsCount').innerText = "Searching...";
 
+  const effectiveMode = (activeTypeFilter === 'filename') ? 'filename' : currentSearchMode;
+
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&limit=${pageSize}&offset=${offset}&mode=${encodeURIComponent(currentSearchMode)}`);
+    const res = await fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&limit=${pageSize}&offset=${offset}&mode=${encodeURIComponent(effectiveMode)}`);
     const data = await res.json();
     const t1 = performance.now();
     document.getElementById('timing').innerText = `${Math.round(t1 - t0)}ms`;
@@ -2287,7 +2300,8 @@ function exportCSV() {
     return;
   }
   showToast("📥 Exporting results to CSV...");
-  window.location.href = `/api/search/csv?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(currentSearchMode)}`;
+  const effectiveMode = (activeTypeFilter === 'filename') ? 'filename' : currentSearchMode;
+  window.location.href = `/api/search/csv?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(effectiveMode)}`;
 }
 
 window.onload = () => {

@@ -30,6 +30,7 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
     filetype_filter = parsed_q["filetype"]
     phone_filter = parsed_q.get("phone_filter")
     folder_filter = parsed_q.get("folder_filter")
+    filename_filter = parsed_q.get("filename_filter")
     exact_phrases = parsed_q["exact_phrases"]
     clean_tokens = parsed_q["clean_tokens"]
 
@@ -42,13 +43,13 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
 
     # Detect if query is inherently a telecom search (phone number, prefix query, or phone filter)
     is_telecom_detected = bool(
-        mode == "telecom"
+        (mode == "telecom"
         or phone_filter
         or query.lower().startswith("prefix:")
         or (digits_only and (
             (len(digits_only) in (3, 4) and digits_only.startswith("01")) or
             (len(digits_only) >= 8 and (digits_only.startswith("01") or digits_only.startswith("201") or digits_only.startswith("00201")))
-        ))
+        ))) and mode != "filename"
     )
 
     scope_clause_cdr = ""
@@ -74,6 +75,68 @@ def query_db(db_path, query, limit=50, offset=0, scope_file=None, scope_folder=N
             scope_params_cdr.extend([clean_fld, clean_fld])
             scope_clause_fts = " AND (f.folder LIKE ? OR u.file_path LIKE ?) "
             scope_params_fts.extend([clean_fld, clean_fld])
+
+    # Direct Filename-Only Search Mode or filename: operator
+    if mode == "filename" or filename_filter:
+        target_fn = filename_filter or (" ".join(clean_tokens) if clean_tokens else query)
+        fn_pattern = f"%{target_fn.strip()}%"
+        fn_type_clause = ""
+        fn_type_params = []
+        if filetype_filter:
+            fn_type_clause = " AND lower(f.filename) LIKE ? "
+            fn_type_params = [f"%.{filetype_filter}"]
+
+        count_fn_sql = f"""
+        SELECT COUNT(*)
+        FROM files f
+        WHERE (f.filename LIKE ? OR f.file_path LIKE ?) {scope_clause_cdr} {fn_type_clause};
+        """
+        cur.execute(count_fn_sql, [fn_pattern, fn_pattern] + scope_params_cdr + fn_type_params)
+        total_fn = cur.fetchone()[0] or 0
+
+        fn_sql = f"""
+        SELECT f.filename, f.folder, f.file_path, f.file_size, f.indexed_at,
+               (SELECT COUNT(*) FROM cdr_records c WHERE c.file_id = f.file_id) as rec_count
+        FROM files f
+        WHERE (f.filename LIKE ? OR f.file_path LIKE ?) {scope_clause_cdr} {fn_type_clause}
+        ORDER BY 
+          CASE WHEN lower(f.filename) LIKE ? THEN 0 ELSE 1 END ASC,
+          f.filename ASC
+        LIMIT ? OFFSET ?;
+        """
+        cur.execute(fn_sql, [fn_pattern, fn_pattern] + scope_params_cdr + fn_type_params + [f"%{target_fn.strip().lower()}%", limit, offset])
+        fn_rows = cur.fetchall()
+        conn.close()
+
+        results = []
+        for r in fn_rows:
+            fpath = r[2]
+            fsize = r[3]
+            try:
+                if (not fsize or fsize <= 0) and os.path.exists(fpath):
+                    fsize = os.path.getsize(fpath)
+            except Exception:
+                pass
+            rec_cnt = r[5] or 0
+            results.append({
+                "file": r[0],
+                "folder": r[1] or os.path.dirname(fpath),
+                "path": fpath,
+                "sheet": "",
+                "row": 0,
+                "content": r[0],
+                "snippet": f"File: {r[0]} ({rec_cnt:,} indexed entries)" if rec_cnt > 0 else f"File: {r[0]}",
+                "size": fsize,
+                "indexed_at": r[4] or "—",
+                "time": "—",
+                "dir": "—",
+                "target": "—",
+                "other": "—",
+                "name": "—",
+                "duration": "—",
+                "address": "—"
+            })
+        return {"type": "general", "rows": results, "total": total_fn, "limit": limit, "offset": offset, "mode": mode}
 
     # Prefix search for Telecom
     if is_telecom_detected and (query.lower().startswith("prefix:") or (digits_only and len(digits_only) in (3, 4) and digits_only.startswith("01"))):
